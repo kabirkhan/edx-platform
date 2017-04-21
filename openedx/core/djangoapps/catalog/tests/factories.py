@@ -73,6 +73,7 @@ class OrganizationFactory(DictFactoryBase):
     key = factory.Faker('word')
     name = factory.Faker('company')
     uuid = factory.Faker('uuid4')
+    logo_image_url = factory.Faker('image_url')
 
 
 class SeatFactory(DictFactoryBase):
@@ -108,19 +109,53 @@ class CourseFactory(DictFactoryBase):
     uuid = factory.Faker('uuid4')
 
 
+class JobOutlookItemFactory(DictFactoryBase):
+    value = factory.Faker('sentence')
+
+
+class PersonFactory(DictFactoryBase):
+    bio = factory.fuzzy.FuzzyText()
+    given_name = factory.Faker('first_name')
+    family_name = factory.Faker('last_name')
+    profile_image_url = factory.Faker('image_url')
+    uuid = factory.Faker('uuid4')
+
+
+class EndorserFactory(DictFactoryBase):
+    person = PersonFactory()
+    quote = factory.Faker('sentence')
+
+
+class ExpectedLearningItemFactory(DictFactoryBase):
+    value = factory.Faker('sentence')
+
+
+class FAQFactory(DictFactoryBase):
+    answer = factory.Faker('sentence')
+    question = factory.Faker('sentence')
+
+
 class ProgramFactory(DictFactoryBase):
     authoring_organizations = factory.LazyFunction(partial(generate_instances, OrganizationFactory, count=1))
     banner_image = factory.LazyFunction(generate_sized_stdimage)
     card_image_url = factory.Faker('image_url')
     courses = factory.LazyFunction(partial(generate_instances, CourseFactory))
+    expected_learning_items = factory.LazyFunction(partial(generate_instances, CourseFactory))
+    individual_endorsements = factory.LazyFunction(partial(generate_instances, EndorserFactory))
     is_program_eligible_for_one_click_purchase = True
+    faq = factory.LazyFunction(partial(generate_instances, FAQFactory))
+    job_outlook_items = factory.LazyFunction(partial(generate_instances, JobOutlookItemFactory))
     marketing_slug = factory.Faker('slug')
     marketing_url = factory.Faker('url')
+    max_hours_effort_per_week = factory.fuzzy.FuzzyInteger(21, 28)
+    min_hours_effort_per_week = factory.fuzzy.FuzzyInteger(7, 14)
+    overview = factory.Faker('sentence')
     status = 'active'
     subtitle = factory.Faker('sentence')
     title = factory.Faker('catch_phrase')
     type = factory.Faker('word')
     uuid = factory.Faker('uuid4')
+    weeks_to_complete = factory.fuzzy.FuzzyInteger(1, 45)
 
 
 class ProgramTypeFactory(DictFactoryBase):
