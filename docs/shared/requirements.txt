@@ -9,7 +9,7 @@ beautifulsoup==3.2.1
 boto==2.6.0
 celery==3.0.19
 distribute>=0.6.28, <0.7
-django-celery==3.0.17
+django-celery==3.2.1
 django-countries==4.0
 django-filter==0.11.0
 django-mako==0.1.5pre
