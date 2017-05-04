@@ -150,6 +150,7 @@ class ProgramFactory(DictFactoryBase):
     max_hours_effort_per_week = factory.fuzzy.FuzzyInteger(21, 28)
     min_hours_effort_per_week = factory.fuzzy.FuzzyInteger(7, 14)
     overview = factory.Faker('sentence')
+    staff = factory.LazyFunction(partial(generate_instances, PersonFactory))
     status = 'active'
     subtitle = factory.Faker('sentence')
     title = factory.Faker('catch_phrase')
