@@ -19,7 +19,7 @@ status = program['status']
 courses = program['courses']
 subtitle = program['subtitle']
 overview = program['overview']
-instructors = program['instructors']
+instructors = program['staff']
 job_outlook_items = program['job_outlook_items']
 weeks_to_complete = program['weeks_to_complete']
 full_program_price_format = '{0:.0f}' if program['full_program_price'].is_integer() else '{0:.2f}'
@@ -164,7 +164,7 @@ description_max_length = 250
                     <div class="avatar">
                       <div class="img-holder">
                         <a href="#instructor-details-mobile-${index}" class="instructor-image">
-                          <img src="${static.url(instructor.get('image'))}" alt="${instructor.get('name')}"/>
+                          <img src="${static.url(instructor.get('profile_image_url'))}" alt="${instructor.get('name')}"/>
                         </a>
                       </div>
                     </div>
@@ -172,7 +172,9 @@ description_max_length = 250
                       <div class="name">
                         <a href="#instructor-details-mobile-${index}" class="instructor-label">${instructor.get('name')}</a>
                       </div>
-                      <div class="dept">${instructor.get('organization')}</div>
+                      % if instructor.get('position'):
+                        <div class="dept">${instructor['position'].get('organization_name')}</div>
+                      % endif
                     </div>
                     <div class="modal modal-custom" id="instructor-details-mobile-${index}">
                       <a href="#" class="focusKeeper"></a>
@@ -181,17 +183,18 @@ description_max_length = 250
                         <div class="modal-header">
                           <div class="instructor-data">
                             <div class="thumbnail">
-                              <img src="${instructor['image']}" alt="${instructor.get('name')}">
+                              <img src="${instructor['profile_image_url']}" alt="${instructor.get('name')}">
                             </div>
                             <h3>
                               <span class="instructor-name">${instructor.get('name')}</span>
-                              <span>${instructor['title']}
-                                % if instructor['organization']:
-                                  ${Text(_('at {organization}')).format(
-                                    organization=instructor['organization']
+                              % if instructor.get('position'):
+                                <span>
+                                  ${Text(_('{position} at {organization}')).format(
+                                    position=instructor['position'].get('title'),
+                                    organization=instructor['position'].get('organization_name')
                                   )}
-                                % endif
-                              </span>
+                                </span>
+                              % endif
                             </h3>
                           </div>
                         </div>
@@ -248,13 +251,25 @@ description_max_length = 250
               <div class="avatar">
                 <div class="img-holder">
                   <a href="#instructor-details-${index}" class="instructor-image">
-                    <img src="${static.url(instructor.get('image'))}" alt="${instructor.get('name')}"/>
+                    <img src="${static.url(instructor.get('profile_image_url'))}"
+                         alt="${Text('{given_name} {family_name}').format(
+                           given_name=instructor.get('given_name'),
+                           family_name=instructor.get('family_name'))}"/>
                   </a>
                 </div>
               </div>
               <div class="details">
-                <div class="name"><a href="#instructor-details-${index}" class="instructor-label">${instructor.get('name')}</a></div>
-                <div class="dept">${instructor.get('organization')}</div>
+                <div class="name">
+                  <a href="#instructor-details-${index}" class="instructor-label">
+                    ${Text('{given_name} {family_name}').format(
+                      given_name=instructor.get('given_name'),
+                      family_name=instructor.get('family_name'),
+                    )}
+                  </a>
+                </div>
+                % if instructor.get('position'):
+                  <div class="dept">${instructor['position'].get('organization_name')}</div>
+                % endif
               </div>
 
               <div class="modal modal-custom" id="instructor-details-${index}">
@@ -264,17 +279,26 @@ description_max_length = 250
                   <div class="modal-header">
                     <div class="instructor-data">
                       <div class="thumbnail">
-                        <img src="${instructor['image']}" alt="${instructor['name']}">
+                        <img src="${instructor['profile_image_url']}"
+                             alt="${Text('{given_name} {family_name}').format(
+                               given_name=instructor.get('given_name'),
+                               family_name=instructor.get('family_name'))}"/>
                       </div>
                       <h3>
-                        <span class="instructor-name">${instructor['name']}</span>
-                        <span>${instructor['title']}
-                          % if instructor['organization']:
-                            ${Text(_('at {organization}')).format(
-                              organization=instructor['organization']
-                            )}
-                          % endif
+                        <span class="instructor-name">
+                          ${Text('{given_name} {family_name}').format(
+                            given_name=instructor.get('given_name'),
+                            family_name=instructor.get('family_name'),
+                          )}
                         </span>
+                        % if instructor.get('position'):
+                          <span>
+                            ${Text(_('{position} at {organization}')).format(
+                              position=instructor['position'].get('title'),
+                              organization=instructor['position'].get('organization_name')
+                            )}
+                          </span>
+                        % endif
                       </h3>
                     </div>
                   </div>

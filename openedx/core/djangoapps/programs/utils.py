@@ -493,10 +493,6 @@ class ProgramMarketingDataExtender(ProgramDataExtender):
     """
     def __init__(self, program_data, user):
         super(ProgramMarketingDataExtender, self).__init__(program_data, user)
-
-        # Aggregate dict of instructors for the program keyed by name
-        self.instructors = {}
-
         # Values for programs' price calculation.
         self.data['avg_price_per_course'] = 0
         self.data['number_of_courses'] = 0
@@ -504,29 +500,16 @@ class ProgramMarketingDataExtender(ProgramDataExtender):
 
     def _extend_program(self):
         """Aggregates data from the program data structure."""
-        cache_key = 'program.instructors.{uuid}'.format(
-            uuid=self.data['uuid']
-        )
-        program_instructors = cache.get(cache_key)
         is_learner_eligible_for_one_click_purchase = self.data['is_program_eligible_for_one_click_purchase']
 
         for course in self.data['courses']:
             self._execute('_collect_course', course)
-            if not program_instructors:
-                for course_run in course['course_runs']:
-                    self._execute('_collect_instructors', course_run)
             if is_learner_eligible_for_one_click_purchase:
                 is_learner_eligible_for_one_click_purchase = not any(
                     course_run['is_enrolled'] for course_run in course['course_runs']
                 )
 
-        if not program_instructors:
-            # We cache the program instructors list to avoid repeated modulestore queries
-            program_instructors = self.instructors.values()
-            cache.set(cache_key, program_instructors, 3600)
-
         self.data.update({
-            'instructors': program_instructors,
             'is_learner_eligible_for_one_click_purchase': is_learner_eligible_for_one_click_purchase,
         })
 
@@ -565,21 +548,3 @@ class ProgramMarketingDataExtender(ProgramDataExtender):
             if seats:
                 self.data['full_program_price'] += float(seats[0]['price'])
             self.data['avg_price_per_course'] = self.data['full_program_price'] / self.data['number_of_courses']
-
-    def _collect_instructors(self, course_run):
-        """
-        Extend the program data with instructor data. The instructor data added here is persisted
-        on each course in modulestore and can be edited in Studio. Once the course metadata publisher tool
-        supports the authoring of course instructor data, we will be able to migrate course
-        instructor data into the catalog, retrieve it via the catalog API, and remove this code.
-        """
-        module_store = modulestore()
-        course_run_key = CourseKey.from_string(course_run['key'])
-        course_descriptor = module_store.get_course(course_run_key)
-        if course_descriptor:
-            course_instructors = getattr(course_descriptor, 'instructor_info', {})
-
-            # Deduplicate program instructors using instructor name
-            self.instructors.update(
-                {instructor.get('name'): instructor for instructor in course_instructors.get('instructors', [])}
-            )
