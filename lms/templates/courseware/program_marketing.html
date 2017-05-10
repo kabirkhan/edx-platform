@@ -41,6 +41,7 @@ description_max_length = 250
 %>
 
 <%static:css group='style-main-v2'/>
+<%static:css group='style-learner-dashboard'/>
 
 <%block name="pagetitle">${program['title']}</%block>
 
@@ -51,15 +52,12 @@ description_max_length = 250
         <div class="col col-12 md-col-8 lg-col-9">
           <div class="org-logo">
             % if authoring_organizations and authoring_organizations[0]['logo_image_url']:
-              <img src="${authoring_organizations[0]['logo_image_url']}"
-                   alt="${authoring_organizations[0]['name']}">
+              <img src="${authoring_organizations[0]['logo_image_url']}" alt="${authoring_organizations[0]['name']}">
             % endif
           </div>
           <h1 class="banner-title">${title}</h1>
           <p class="banner-description">${subtitle}</p>
-          <a href="#courses" class="btn-brand btn-large hidden-sm btn-start">
-            ${_('Start Learning')}
-          </a>
+          <a href="#courses" class="btn-brand btn-large hidden-sm btn-start">${_('Start Learning')}</a>
         </div>
         <div class="col col-12 md-col-4 lg-col-3" id="course-trailer">
           <a href="#video-modal" class="media trailer-link visible-sm" rel="leanModal">
@@ -68,7 +66,7 @@ description_max_length = 250
           </a>
           <div class="hidden-sm">
             <a href="#video-modal" class="media btn-play" rel="leanModal">
-                <img src="${static.url('images/btn-play.png')}" alt="${_('Play')}"/>
+              <img src="${static.url('images/btn-play.png')}" alt="${_('Play')}"/>
             </a>
           </div>
         </div>
@@ -94,7 +92,7 @@ description_max_length = 250
           <li class="item">
             <span>
               <span class="fa fa-clock-o fa-lg" aria-hidden="true"></span>
-              ${_("Average Length")}
+              ${_('Average Length')}
             </span>
             <span>
               ${Text(_('{weeks_to_complete} weeks per course')).format(
@@ -105,7 +103,7 @@ description_max_length = 250
           <li class="item">
             <span>
               <span class="fa fa-tachometer fa-lg" aria-hidden="true"></span>
-              ${_("Effort")}
+              ${_('Effort')}
             </span>
             <span>
               ${Text(_('{min_hours_effort_per_week}-{max_hours_effort_per_week} hours per week, per course')).format(
@@ -117,7 +115,7 @@ description_max_length = 250
           <li class="item">
             <span>
               <span class="fa fa-tag fa-lg" aria-hidden="true"></span>
-              ${_("Price (USD)")}
+              ${_('Price (USD)')}
             </span>
             <span>
               ${Text(_('${full_program_price} for entire program')).format(
@@ -199,8 +197,9 @@ description_max_length = 250
                           </div>
                         </div>
                         <div class="instructor-bio">${instructor['bio']}</div>
+                      </div>
+                      <a href="#" class="focusKeeper"></a>
                     </div>
-                    <a href="#" class="focusKeeper"></a>
                   </div>
                 %endfor
               </div>

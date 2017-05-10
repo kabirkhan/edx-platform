@@ -1,9 +1,14 @@
 <%page args="program_type" expression_filter="h"/>
+<%!
+from django.utils.translation import ugettext as _
+
+from openedx.core.djangolib.markup import Text
+%>
 <%namespace name='static' file='../static_content.html'/>
 
 <div class="accordion-item">
   <div class="accordion-head">
-    ${Text(_('What is a ${program_type}?').format(program_type=program_type)}
+    ${Text(_('What is a {program_type}?')).format(program_type=program_type)}
   </div>
   <div class="accordion-content">
     <p>
