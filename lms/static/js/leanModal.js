@@ -1,125 +1,134 @@
-(function($){
-  $.fn.extend({
-    /*
-     * leanModal prepares an element to be a modal dialog.  Call it once on the
-     * element that launches the dialog, when the page is ready.  This function
-     * will add a .click() handler that properly opens the dialog.
-     *
-     * The launching element must:
-     *   - be an <a> element, not a button,
-     *   - have an href= attribute identifying the id of the dialog element,
-     *   - have rel='leanModal'.
-     */
-    leanModal: function(options) {
-      var defaults = {
-        top: 100,
-        overlay: 0.5,
-        closeButton: null,
-        position: 'fixed'
-      }
+(function($) {
+    'use strict';
+    $.fn.extend({
+        /*
+         * leanModal prepares an element to be a modal dialog.  Call it once on the
+         * element that launches the dialog, when the page is ready.  This function
+         * will add a .click() handler that properly opens the dialog.
+         *
+         * The launching element must:
+         *   - be an <a> element, not a button,
+         *   - have an href= attribute identifying the id of the dialog element,
+         *   - have rel='leanModal'.
+         */
+        leanModal: function(options) {
+            var defaults = {
+                    top: 100,
+                    overlay: 0.5,
+                    closeButton: null,
+                    position: 'fixed'
+                },
+                $overlay;
 
-      if ($("#lean_overlay").length == 0) {
-        var overlay = $("<div id='lean_overlay'></div>");
-        $("body").append(overlay);
-      }
+            function closeModal(modalId, e) {
+                $('#lean_overlay').fadeOut(200);
+                $('iframe', modalId).attr('src', '');
+                $(modalId).css({display: 'none'});
+                if (modalId === '#modal_clone') {
+                    $(modalId).remove();
+                }
+                e.preventDefault();
+            }
 
-      options = $.extend(defaults, options);
+            if ($('#lean_overlay').length === 0) {
+                $overlay = $("<div id='lean_overlay'></div>");
+                $('body').append($overlay);
+            }
 
-      return this.each(function() {
-        var o = options;
+            $.extend(options, defaults);
 
-        $(this).click(function(e) {
+            return this.each(function() {
+                var o = options;
 
-          $(".modal").hide();
+                $(this).click(function(ev) {
+                    var notice,
+                        modalId = $(this).attr('href'),
+                        modalWidth = $(modalId).outerWidth(),
+                        modalClone;
+                    $('.modal').hide();
 
-          var modal_id = $(this).attr("href");
+                    if ($(modalId).hasClass('video-modal')) {
+                        // Video modals need to be cloned before being presented as a modal
+                        // This is because actions on the video get recorded in the history.
+                        // Deleting the video (clone) prevents the odd back button behavior.
+                        modalClone = $(modalId).clone(true, true);
+                        modalClone.attr('id', 'modal_clone');
+                        $(modalId).after(modalClone);
+                        modalId = '#modal_clone';
+                    }
 
-          if ($(modal_id).hasClass("video-modal")) {
-            //Video modals need to be cloned before being presented as a modal
-            //This is because actions on the video get recorded in the history.
-            //Deleting the video (clone) prevents the odd back button behavior.
-            var modal_clone = $(modal_id).clone(true, true);
-            modal_clone.attr('id', 'modal_clone');
-            $(modal_id).after(modal_clone);
-            modal_id = '#modal_clone';
-          }
+                    $('#lean_overlay').click(function(e) {
+                        closeModal(modalId, e);
+                    });
 
-          $("#lean_overlay").click(function(e) {
-            close_modal(modal_id, e);
-          });
+                    $(o.closeButton).click(function(e) {
+                        closeModal(modalId, e);
+                    });
 
-          $(o.closeButton).click(function(e) {
-            close_modal(modal_id, e);
-          });
+                    // To enable closing of email modal when copy button hit
+                    $(o.copyEmailButton).click(function(e) {
+                        closeModal(modalId, e);
+                    });
 
-          // To enable closing of email modal when copy button hit
-          $(o.copyEmailButton).click(function(e) {
-            close_modal(modal_id, e);
-          });
+                    $('#lean_overlay').css({display: 'block', opacity: 0});
+                    $('#lean_overlay').fadeTo(200, o.overlay);
 
-          var modal_height = $(modal_id).outerHeight();
-          var modal_width = $(modal_id).outerWidth();
+                    $('iframe', modalId).attr('src', $('iframe', modalId).data('src'));
+                    if ($(modalId).hasClass('email-modal')) {
+                        $(modalId).css({
+                            width: 80 + '%',
+                            height: 80 + '%',
+                            position: o.position,
+                            opacity: 0,
+                            'z-index': 11000,
+                            left: 10 + '%',
+                            top: 10 + '%'
+                        });
+                    } else {
+                        $(modalId).css({
+                            position: o.position,
+                            opacity: 0,
+                            'z-index': 11000,
+                            left: 50 + '%',
+                            'margin-left': -(modalWidth / 2) + 'px',
+                            top: o.top + 'px'
+                        });
+                    }
 
-          $('#lean_overlay').css({ 'display' : 'block', opacity : 0 });
-          $('#lean_overlay').fadeTo(200,o.overlay);
-
-          $('iframe', modal_id).attr('src', $('iframe', modal_id).data('src'));
-          if ($(modal_id).hasClass("email-modal")){
-            $(modal_id).css({
-              'width' : 80 + '%',
-              'height' : 80 + '%',
-              'position' : o.position,
-              'opacity' : 0,
-              'z-index' : 11000,
-              'left' : 10 + '%',
-              'top' : 10 + '%'
-            })
-          } else {
-            $(modal_id).css({
-              'position' : o.position,
-              'opacity' : 0,
-              'z-index': 11000,
-              'left' : 50 + '%',
-              'margin-left' : -(modal_width/2) + "px",
-              'top' : o.top + "px"
-            })
+                    $(modalId).show().fadeTo(200, 1);
+                    $(modalId).find('.notice')
+                              .hide()
+                              .html('');
+                    notice = $(this).data('notice');
+                    if (notice !== undefined) {
+                        notice = $(modalId).find('.notice');
+                        notice.show().html(notice);
+                        // This is for activating leanModal links that were in the notice.
+                        // We should have a cleaner way of allowing all dynamically added
+                        // leanmodal links to work.
+                        notice.find('a[rel*=leanModal]').leanModal({
+                            top: 120,
+                            overlay: 1,
+                            closeButton: '.close-modal',
+                            position: 'absolute'
+                        });
+                    }
+                    ev.preventDefault();
+                });
+            });
         }
-
-          $(modal_id).show().fadeTo(200,1);
-          $(modal_id).find(".notice").hide().html("");
-          var notice = $(this).data('notice')
-          if(notice !== undefined) {
-            $notice = $(modal_id).find(".notice");
-            $notice.show().html(notice);
-            // This is for activating leanModal links that were in the notice. We should have a cleaner way of
-            // allowing all dynamically added leanmodal links to work.
-            $notice.find("a[rel*=leanModal]").leanModal({ top : 120, overlay: 1, closeButton: ".close-modal", position: 'absolute' });
-          }
-          e.preventDefault();
-        });
-      });
-
-      function close_modal(modal_id, e) {
-        $("#lean_overlay").fadeOut(200);
-        $('iframe', modal_id).attr('src', '');
-        $(modal_id).css({ 'display' : 'none' });
-        if (modal_id == '#modal_clone') {
-          $(modal_id).remove();
-        }
-        e.preventDefault();
-      }
-    }
-  });
-
-  $(document).ready(function ($) {
-    $("a[rel*=leanModal]").each(function () {
-      $(this).leanModal({ top : 120, overlay: 1, closeButton: ".close-modal", position: 'absolute' });
-      embed = $($(this).attr('href')).find('iframe')
-      if (embed.length > 0 && embed.attr('src')) {
-        var sep = (embed.attr('src').indexOf("?") > 0) ? '&' : '?';
-        embed.data('src', embed.attr('src') + sep + 'autoplay=1&rel=0');
-        embed.attr('src', '');
-      }
     });
-  });
-})(jQuery);
+
+    $(document).ready(function() {
+        $('a[rel*=leanModal]').each(function() {
+            var embed = $($(this).attr('href')).find('iframe'),
+                sep;
+            $(this).leanModal({top: 120, overlay: 1, closeButton: '.close-modal', position: 'absolute'});
+            if (embed.length > 0 && embed.attr('src')) {
+                sep = (embed.attr('src').indexOf('?') > 0) ? '&' : '?';
+                embed.data('src', embed.attr('src') + sep + 'autoplay=1&rel=0');
+                embed.attr('src', '');
+            }
+        });
+    });
+}(jQuery));
