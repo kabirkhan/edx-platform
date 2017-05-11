@@ -43,6 +43,12 @@ description_max_length = 250
 <%static:css group='style-main-v2'/>
 <%static:css group='style-learner-dashboard'/>
 
+<%block name="js_extra">
+  <script src="${static.url('js/slick.min.js')}"></script>
+  <script src="${static.url('js/leanModal.js')}"></script>
+  <script src="${static.url('js/program_marketing.js')}"></script>
+</%block>
+
 <%block name="pagetitle">${program['title']}</%block>
 
 <div id="program-details-page">
