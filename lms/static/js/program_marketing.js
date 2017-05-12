@@ -43,7 +43,7 @@ function paginate(page, size, total) {
 $.fn.getFocusableChildren = function() {
     'use strict';
     return $(this)
-        /*eslint max-len: 0 */
+        /* eslint max-len: 0 */
         .find('a[href], area[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), iframe, object:not([disabled]), embed, *[tabindex], *[contenteditable]')
         .filter(':visible');
 };
@@ -52,7 +52,7 @@ $(document).ready(function() {
     'use strict';
     // Create MutationObserver which prevents the body of
     // the page from scrolling when a modal window is displayed
-    var observer = new MutationObserver(function(mutations, _obv) {
+    var observer = new MutationObserver(function(mutations) {
         mutations.forEach(function(mutation) {
             if ($(mutation.target).css('display') === 'block') {
                 $('body').css('overflow', 'hidden');
@@ -111,7 +111,7 @@ $(document).ready(function() {
         observer.observe(element, {attributes: true, attributeFilter: ['style']});
     });
 
-    $slickElement.on('init reInit afterChange', function(event, slick, currentSlide, _nextSlide) {
+    $slickElement.on('init reInit afterChange', function(event, slick, currentSlide) {
         // currentSlide is undefined on init -- set it to 0 in this case (currentSlide is 0 based)
         var i = currentSlide || 1;
         $status.text(i + ' of ' + slick.slideCount);
