@@ -60,10 +60,19 @@ class EcommerceService(object):
         """
         return self.get_absolute_ecommerce_url(self.config.single_course_checkout_page)
 
-    def checkout_page_url(self, sku):
+    def checkout_page_url(self, skus):
         """ Construct the URL to the ecommerce checkout page and include a product.
 
+        Args:
+            skus (list): List of product SKUs
+
+        Returns:
+            Absolute path to the ecommerce checkout page showing basket that contains specified products.
+
         Example:
-            http://localhost:8002/basket/single_item/?sku=5H3HG5
+            http://localhost:8002/basket/single_item/?sku=5H3HG5&sku=57FHHD
         """
-        return "{}?sku={}".format(self.get_absolute_ecommerce_url(self.config.single_course_checkout_page), sku)
+        return '{checkout_page_path}?{skus}'.format(
+            checkout_page_path=self.get_absolute_ecommerce_url(self.config.single_course_checkout_page),
+            skus='&'.join('sku={sku}'.format(sku=sku) for sku in skus),
+        )

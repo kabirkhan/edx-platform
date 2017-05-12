@@ -428,7 +428,7 @@ class ProgramDataExtender(object):
             ecommerce = EcommerceService()
             sku = getattr(required_mode, 'sku', None)
             if ecommerce.is_enabled(self.user) and sku:
-                run_mode['upgrade_url'] = ecommerce.checkout_page_url(required_mode.sku)
+                run_mode['upgrade_url'] = ecommerce.checkout_page_url([required_mode.sku])
             else:
                 run_mode['upgrade_url'] = None
         else:
@@ -500,9 +500,15 @@ class ProgramMarketingDataExtender(ProgramDataExtender):
 
     def _extend_program(self):
         """Aggregates data from the program data structure."""
+        ecommerce_service = EcommerceService()
         is_learner_eligible_for_one_click_purchase = self.data['is_program_eligible_for_one_click_purchase']
+        skus = []
+        applicable_seat_types = self.data['applicable_seat_types']
 
         for course in self.data['courses']:
+            for seat in course['course_runs'][0]['seats']:
+                if seat['type'] in applicable_seat_types:
+                    skus.append(seat['sku'])
             self._execute('_collect_course', course)
             if is_learner_eligible_for_one_click_purchase:
                 is_learner_eligible_for_one_click_purchase = not any(
@@ -511,6 +517,7 @@ class ProgramMarketingDataExtender(ProgramDataExtender):
 
         self.data.update({
             'is_learner_eligible_for_one_click_purchase': is_learner_eligible_for_one_click_purchase,
+            'basket_page_url': ecommerce_service.checkout_page_url(skus)
         })
 
     @classmethod
