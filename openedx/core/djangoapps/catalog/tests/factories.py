@@ -34,6 +34,15 @@ def generate_zulu_datetime():
     return fake.date_time().isoformat() + 'Z'
 
 
+def generate_price_ranges():
+    return [{
+        'currency': 'USD',
+        'max': 1000,
+        'min': 100,
+        'total': 500
+    }]
+
+
 class DictFactoryBase(factory.Factory):
     class Meta(object):
         model = dict
@@ -135,13 +144,6 @@ class FAQFactory(DictFactoryBase):
     question = factory.Faker('sentence')
 
 
-class PriceRangeFactory(DictFactoryBase):
-    max = factory.fuzzy.FuzzyInteger(500, 1000),
-    total = factory.fuzzy.FuzzyInteger(100, 1000),
-    min = factory.fuzzy.FuzzyInteger(100, 500),
-    currency = 'USD'
-
-
 class ProgramFactory(DictFactoryBase):
     authoring_organizations = factory.LazyFunction(partial(generate_instances, OrganizationFactory, count=1))
     applicable_seat_types = ['verified']
@@ -158,7 +160,7 @@ class ProgramFactory(DictFactoryBase):
     max_hours_effort_per_week = factory.fuzzy.FuzzyInteger(21, 28)
     min_hours_effort_per_week = factory.fuzzy.FuzzyInteger(7, 14)
     overview = factory.Faker('sentence')
-    price_ranges = factory.LazyFunction(partial(generate_instances, PriceRangeFactory))
+    price_ranges = factory.LazyFunction(generate_price_ranges)
     staff = factory.LazyFunction(partial(generate_instances, PersonFactory))
     status = 'active'
     subtitle = factory.Faker('sentence')
