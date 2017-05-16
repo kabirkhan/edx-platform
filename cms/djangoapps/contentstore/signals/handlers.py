@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from pytz import UTC
 
-# from django.dispatch import receiver
+from django.dispatch import receiver
 
 from xmodule.modulestore.django import modulestore, SignalHandler
 from contentstore.courseware_index import CoursewareSearchIndexer, LibrarySearchIndexer
