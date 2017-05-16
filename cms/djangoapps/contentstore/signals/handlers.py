@@ -7,8 +7,8 @@ from pytz import UTC
 from django.dispatch import receiver
 
 from xmodule.modulestore.django import modulestore, SignalHandler
-from cms.contentstore.courseware_index import CoursewareSearchIndexer, LibrarySearchIndexer
-from cms.contentstore.proctoring import register_special_exams
+from contentstore.courseware_index import CoursewareSearchIndexer, LibrarySearchIndexer
+from contentstore.proctoring import register_special_exams
 from openedx.core.djangoapps.credit.signals import on_course_publish
 from openedx.core.lib.gating import api as gating_api
 from util.module_utils import yield_dynamic_descriptor_descendants
