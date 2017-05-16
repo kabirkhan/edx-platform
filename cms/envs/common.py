@@ -868,7 +868,7 @@ INSTALLED_APPS = (
     'contentstore',
 
     # Contentstore Signal Handlers
-    'cms.djangoapps.contentstore.apps.ContentstoreConfig',
+    'cms.djangoapps.contentstoresig.apps.ContentstoreConfig',
 
     'openedx.core.djangoapps.contentserver',
     'course_creators',

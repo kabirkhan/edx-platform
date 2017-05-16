@@ -12,7 +12,7 @@ class ContentstoreConfig(AppConfig):
     Application Configuration for Grades.
     """
     # A Test, may not be needed
-    # name = u'cms.djangoapps.contentstore'
+    name = u'cms.djangoapps.contentstoresig'
 
     def ready(self):
         """
