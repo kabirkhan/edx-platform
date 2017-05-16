@@ -10,6 +10,7 @@ from django.db.utils import DatabaseError
 from logging import getLogger
 
 log = getLogger(__name__)
+import six
 
 from celery_utils.logged_task import LoggedTask
 from celery_utils.persist_on_failure import PersistOnFailureTask
@@ -54,8 +55,26 @@ class _BaseTask(PersistOnFailureTask, LoggedTask):  # pylint: disable=abstract-m
     abstract = True
 
 
+@task(base=_BaseTask)
+def compute_all_grades_for_course(**kwargs):
+    """
+    Compute grades for all students in the specified course.
+    Kicks off a series of compute_grades_for_course_v2 tasks
+    to cover all of the students in the course.
+    """
+    course_key = kwargs.pop('course_key')
+    batch_size = 100 # TODO: update?
+    enrollment_count = CourseEnrollment.objects.filter(course_id=course_key).count()
+    for offset in six.moves.range(0, enrollment_count, batch_size):
+        compute_grades_for_course_v2.apply_async(
+            course_key=six.text_type(course_key),
+            offset=offset,
+            batch_size=batch_size,
+        )
+
+
 @task(base=_BaseTask, bind=True, default_retry_delay=30, max_retries=1)
-def compute_grades_for_course_v2(self, **kwargs):
+def compute_grades_for_course_v2(**kwargs):
     """
     Compute grades for a set of students in the specified course.
 
