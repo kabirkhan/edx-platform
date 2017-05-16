@@ -199,6 +199,13 @@ else:
     return get_value('SHOW_LANGUAGE_SELECTOR', settings.FEATURES.get('SHOW_LANGUAGE_SELECTOR', False))
 %></%def>
 
+<%def name="show_footer_language_selector(api_setting)"><%
+    if not api_setting is UNDEFINED:
+        return api_setting
+    else:
+        return get_value('SHOW_FOOTER_LANGUAGE_SELECTOR', settings.FEATURES.get('SHOW_FOOTER_LANGUAGE_SELECTOR', False))
+%></%def>
+
 <%def name="get_released_languages()"><%
     return released_languages()
 %></%def>
