@@ -1,7 +1,7 @@
 """
 Unit tests for the gating feature in Studio
 """
-from contentstore.signals import handle_item_deleted
+from contentstore.signals.handlers import handle_item_deleted
 from milestones.tests.utils import MilestonesTestCaseMixin
 from mock import patch
 from openedx.core.lib.gating import api as gating_api
