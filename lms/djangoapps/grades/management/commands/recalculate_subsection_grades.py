@@ -1,0 +1,89 @@
+"""
+Command to compute all grades for specified courses.
+"""
+
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+from datetime import datetime
+import logging
+from pytz import utc
+
+from django.core.management.base import BaseCommand
+from lms.djangoapps.grades.constants import ScoreDatabaseTableEnum
+from lms.djangoapps.grades.tasks import recalculate_subsection_grade_v3
+from courseware.models import StudentModule
+from submissions.models import Submission
+from track.event_transaction_utils import create_new_event_transaction_id, set_event_transaction_type
+from util.date_utils import to_timestamp
+
+log = logging.getLogger(__name__)
+
+DATE_FORMAT = "%Y-%m-%d %H:%M"
+
+
+class Command(BaseCommand):
+    """
+    Example usage:
+        $ ./manage.py lms recalculate_subsection_grades
+            --modified_start '2016-08-23 16:43' --modified_end '2016-08-25 16:43' --settings=devstack
+    """
+    args = 'fill this in'
+    help = 'Recalculates subsection grades for all subsections modified within the given time range.'
+
+    def add_arguments(self, parser):
+        """
+        Entry point for subclassed commands to add custom arguments.
+        """
+        parser.add_argument(
+            '--dry_run',
+            action='store_true',
+            default=False,
+            dest='dry_run',
+            help="Output what we're going to do, but don't actually do it. To actually delete, use --delete instead."
+        )
+        parser.add_argument(
+            '--modified_start',
+            dest='modified_start',
+            help='Starting range for modified date (inclusive): e.g. "2016-08-23 16:43"; expected in UTC.',
+        )
+        parser.add_argument(
+            '--modified_end',
+            dest='modified_end',
+            help='Ending range for modified date (inclusive): e.g. "2016-12-23 16:43"; expected in UTC.',
+        )
+
+    def handle(self, *args, **options):
+        modified_start = utc.localize(datetime.strptime(options['modified_start'], DATE_FORMAT))
+        modified_end = utc.localize(datetime.strptime(options['modified_end'], DATE_FORMAT))
+        event_transaction_id = create_new_event_transaction_id()
+        set_event_transaction_type(u'lms.djangoapps.ARGBLARG')
+        kwargs = {'modified__range': (modified_start, modified_end), 'module_type': 'problem'}
+        for record in StudentModule.objects.filter(**kwargs):
+            task_args = dict(
+                user_id=record.student_id,
+                course_id=unicode(record.course_id),
+                usage_id=unicode(record.module_state_key),
+                only_if_higher=False,
+                expected_modified_time=to_timestamp(record.modified),
+                score_deleted=False,
+                event_transaction_id=unicode(event_transaction_id),
+                event_transaction_type=u'xxx',
+                score_db_table=ScoreDatabaseTableEnum.courseware_student_module,
+            )
+            recalculate_subsection_grade_v3.apply_async(kwargs=task_args)
+
+        kwargs = {'created_at__range': (modified_start, modified_end)}
+        for record in Submission.objects.filter(**kwargs):
+            task_args = dict(
+                user_id=record.student_id,
+                anonymous_user_id=record.anonymous_user_id,
+                course_id=unicode(record.course_id),
+                usage_id=unicode(record.item_id),
+                only_if_higher=False,
+                expected_modified_time=record.created_at,
+                score_deleted=False,
+                event_transaction_id=unicode(event_transaction_id),
+                event_transaction_type=u'xxx',
+                score_db_table=ScoreDatabaseTableEnum.submissions,
+            )
+            recalculate_subsection_grade_v3.apply_async(kwargs=task_args)
