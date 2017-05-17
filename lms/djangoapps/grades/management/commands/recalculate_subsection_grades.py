@@ -23,6 +23,7 @@ DATE_FORMAT = "%Y-%m-%d %H:%M"
 
 PROBLEM_SUBMITTED_EVENT_TYPE = u'edx.grades.problem.submitted'
 
+
 class Command(BaseCommand):
     """
     Example usage:
