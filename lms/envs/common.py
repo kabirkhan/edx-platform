@@ -345,11 +345,17 @@ FEATURES = {
     # Enable LTI Provider feature.
     'ENABLE_LTI_PROVIDER': False,
 
-    # Show language selector in header.
+    # Show language selector in header (Deprecated, use LANGUAGE_SELECTOR setting instead).
     'SHOW_LANGUAGE_SELECTOR': False,
 
-    # Show language selector in footer.
-    'SHOW_FOOTER_LANGUAGE_SELECTOR': False,
+    # Language selector settings
+    'LANGUAGE_SELECTOR': {
+        # Show the language selector in the header
+        'HEADER': False,
+
+        # Show the language selector in the footer
+        'FOOTER': False,
+    },
 
     # Write new CSM history to the extended table.
     # This will eventually default to True and may be

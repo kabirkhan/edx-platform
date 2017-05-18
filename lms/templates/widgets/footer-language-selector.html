@@ -8,13 +8,14 @@
   from django.utils.translation import ugettext as _
 
   from openedx.core.djangoapps.lang_pref import COOKIE_DURATION
-  from openedx.core.djangoapps.lang_pref.api import released_languages
   from openedx.core.djangolib.js_utils import js_escaped_string
 
   # Make sure LANGUAGE_COOKIE is present.
   if not settings.LANGUAGE_COOKIE:
       raise ValueError('settings.LANGUAGE_COOKIE is required to use footer-language-selector.')
 %>
+<%namespace name='static' file='../static_content.html'/>
+<%namespace name='i18n_helpers' file='../i18n_helpers.html'/>
 
 <div class="footer-language-selector">
     <label for="footer-language-select">
@@ -22,7 +23,7 @@
         <span class="sr">${_("Choose Language")}</span>
     </label>
     <select id="footer-language-select" name="language" onchange="footerLanguageSelector.handleSelection(this)">
-        % for language in sorted(released_languages(), key=lambda x: x.code):
+        % for language in sorted(i18n_helpers.get_released_languages(), key=lambda x: x.code):
             <% language_name = Locale.parse(language.code.replace('_', '-'), sep='-').language_name %>
             % if language.code == LANGUAGE_CODE:
                 <option value="${language.code}" selected="selected">${language_name}</option>
@@ -53,8 +54,10 @@
 
         setLanguageCookie: function(value, callback) {
             var cookie = '${settings.LANGUAGE_COOKIE | n, js_escaped_string}=' + value + ';path=/';
-            % if settings.SESSION_COOKIE_DOMAIN:
-                cookie += ';domain=${settings.SESSION_COOKIE_DOMAIN | n, js_escaped_string}';
+
+            <% session_cookie_domain = static.get_value('SESSION_COOKIE_DOMAIN', settings.SESSION_COOKIE_DOMAIN) %>
+            % if session_cookie_domain:
+                cookie += ';domain=${session_cookie_domain | n, js_escaped_string}';
             % endif
             % if COOKIE_DURATION:
                 cookie += ';max-age=${COOKIE_DURATION | n, js_escaped_string}';

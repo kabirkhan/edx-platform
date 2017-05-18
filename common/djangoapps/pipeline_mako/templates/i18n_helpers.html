@@ -1,0 +1,31 @@
+<%page expression_filter="h"/>
+<%!
+import copy
+from django.conf import settings
+from openedx.core.djangoapps.site_configuration.helpers import get_value
+from openedx.core.djangoapps.lang_pref.api import released_languages
+%>
+
+<%def name="language_selector_config()"><%
+    ## Get the base config
+    config = copy.deepcopy(settings.FEATURES.get('LANGUAGE_SELECTOR', {}))
+
+    ## Allow custom site/microsite configuration overrides
+    config.update(get_value('LANGUAGE_SELECTOR', {}))
+
+    ## The SHOW_LANGUAGE_SELECTOR setting is deprecated, but might still be in use on some installations.
+    ## If it is present and True, it should override what has been set via LANGUAGE_SELECTOR, which may have been
+    ## pre-filled with default values.
+    show_language_selector = get_value('SHOW_LANGUAGE_SELECTOR', settings.FEATURES.get('SHOW_LANGUAGE_SELECTOR', False))
+    if show_language_selector:
+        config.update({'HEADER': show_language_selector})
+
+    ## Allow config overrides to be passed via the template context.
+    config.update(context.get('language_selector_config', {}))
+
+    return config
+%></%def>
+
+<%def name="get_released_languages()"><%
+    return released_languages()
+%></%def>

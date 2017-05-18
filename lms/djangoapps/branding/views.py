@@ -143,7 +143,7 @@ def _render_footer_html(request, show_openedx_logo, include_dependencies, includ
         'footer_css_urls': _footer_css_urls(request, css_name),
         'bidi': bidi,
         'include_dependencies': include_dependencies,
-        'include_language_selector': include_language_selector
+        'language_selector_config': {'FOOTER': include_language_selector}
     }
 
     return render_to_response("footer.html", context)

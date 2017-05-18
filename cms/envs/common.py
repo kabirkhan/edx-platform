@@ -225,8 +225,14 @@ FEATURES = {
 
     'ORGANIZATIONS_APP': False,
 
-    # Show Language selector
+    # Show Language selector (Deprecated, use LANGUAGE_SELECTOR setting instead).
     'SHOW_LANGUAGE_SELECTOR': False,
+
+    # Language selector settings
+    'LANGUAGE_SELECTOR': {
+        # Show the language selector in the header
+        'HEADER': False,
+    },
 
     # Set this to False to facilitate cleaning up invalid xml from your modulestore.
     'ENABLE_XBLOCK_XML_VALIDATION': True,

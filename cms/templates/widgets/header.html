@@ -1,5 +1,6 @@
 <%page expression_filter="h" args="online_help_token"/>
 <%namespace name='static' file='../static_content.html'/>
+<%namespace name='i18n_helpers' file='../i18n_helpers.html'/>
 <%!
   from django.conf import settings
   from django.core.urlresolvers import reverse
@@ -183,8 +184,8 @@
     </div>
 
     <div class="wrapper wrapper-r">
-      % if static.show_language_selector():
-        <% languages = static.get_released_languages() %>
+      % if i18n_helpers.language_selector_config().get('HEADER', False):
+        <% languages = i18n_helpers.get_released_languages() %>
         % if len(languages) > 1:
         <nav class="user-language-selector" aria-label="${_('Language preference')}">
           <form action="/i18n/setlang/" method="post" class="settings-language-form" id="language-settings-form">

@@ -7,6 +7,7 @@
 %>
 <% footer = get_footer(is_secure=is_secure) %>
 <%namespace name='static' file='static_content.html'/>
+<%namespace name='i18n_helpers' file='i18n_helpers.html'/>
 
 ## WARNING: These files are specific to edx.org and are not used in installations outside of that domain. Open edX users will want to use the file "footer.html" for any changes or overrides.
 <footer id="footer-edx-v3" role="contentinfo" aria-label="${_("Page Footer")}"
@@ -45,8 +46,8 @@
             </ul>
           </nav>
 
-          % if static.show_footer_language_selector(include_language_selector):
-              <%include file="widgets/footer-language-selector.html"/>
+          % if i18n_helpers.language_selector_config().get('FOOTER', False):
+              <%include file="${static.get_template_path('widgets/footer-language-selector.html')}"/>
           % endif
 
           <p class="copyright">${_(

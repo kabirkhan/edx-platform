@@ -1,6 +1,7 @@
 ## mako
 <%page expression_filter="h" args="online_help_token"/>
 <%namespace name='static' file='static_content.html'/>
+<%namespace name='i18n_helpers' file='i18n_helpers.html'/>
 <%namespace file='main.html' import="login_query"/>
 <%!
 from django.core.urlresolvers import reverse
@@ -176,8 +177,8 @@ site_status_msg = get_site_status_msg(course_id)
         </%block>
       </ol>
     % endif
-    % if static.show_language_selector():
-     <% languages = static.get_released_languages() %>
+    % if i18n_helpers.language_selector_config().get('HEADER', False):
+     <% languages = i18n_helpers.get_released_languages() %>
       % if len(languages) > 1:
       <ol class="user">
         <li class="primary">

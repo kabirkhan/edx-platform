@@ -5,6 +5,7 @@
   from django.utils.translation import ugettext as _
 %>
 <%namespace name='static' file='static_content.html'/>
+<%namespace name='i18n_helpers' file='i18n_helpers.html'/>
 <!-- footer overrides for stanford theme go here -->
 <div class="wrapper-footer">
   <footer>
@@ -21,8 +22,8 @@
         </ol>
       </nav>
 
-      % if static.show_footer_language_selector(include_language_selector):
-          <%include file='widgets/footer-language-selector.html'/>
+      % if i18n_helpers.language_selector_config().get('FOOTER', False):
+          <%include file="${static.get_template_path('widgets/footer-language-selector.html')}"/>
       % endif
 
     </div>
