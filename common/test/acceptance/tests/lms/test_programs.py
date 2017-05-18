@@ -111,14 +111,16 @@ class ProgramMarketingPageTest(ProgramPageBase):
 
         self.marketing_page = ProgramMarketingPage(self.browser)
 
+        self.program = self.create_program()
+        self.program['uuid'] = self.marketing_page.program_uuid
+
     def test_program_course_cards(self):
         """
         Verify that course cards appear when a user visits the marketing page.
         """
         self.auth()
 
-        program = self.create_program()
-        self.stub_catalog_api(programs=[program])
+        self.stub_catalog_api(programs=[self.program])
         self.cache_programs()
 
         self.marketing_page.visit()
