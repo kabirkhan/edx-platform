@@ -1,6 +1,8 @@
 """ API v1 views. """
 import logging
 
+from django.conf import settings
+from django.contrib.auth.models import User
 from django.http import Http404
 from edx_rest_api_client import exceptions
 from rest_framework.authentication import SessionAuthentication
@@ -8,16 +10,23 @@ from rest_framework.views import APIView
 from rest_framework.generics import RetrieveUpdateAPIView, ListAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_oauth.authentication import OAuth2Authentication
+import waffle
 
 from commerce.api.v1.models import Course
-from commerce.api.v1.permissions import ApiKeyOrModelPermission
+from commerce.api.v1.permissions import ApiKeyOrModelPermission, IsAuthenticatedOrActivationOverridden
 from commerce.api.v1.serializers import CourseSerializer
 from course_modes.models import CourseMode
 from openedx.core.djangoapps.commerce.utils import ecommerce_api_client
+from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.lib.api.mixins import PutAsCreateMixin
 from util.json_request import JsonResponse
 
 log = logging.getLogger(__name__)
+
+DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH = configuration_helpers.get_value(
+    'DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH',
+    settings.DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH
+)
 
 
 class CourseListView(ListAPIView):
@@ -64,10 +73,17 @@ class OrderView(APIView):
     """ Retrieve order details. """
 
     authentication_classes = (SessionAuthentication,)
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAuthenticatedOrActivationOverridden,)
 
     def get(self, request, number):
         """ HTTP handler. """
+        # If the account activation requirement is disabled for this installation, override the
+        # anonymous user object attached to the request with the actual user object (if it exists)
+        if not request.user.is_authenticated() and waffle.switch_is_active(DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH):
+            try:
+                request.user = User.objects.get(id=request.session._session_cache['_auth_user_id'])
+            except DoesNotExist:
+                return JsonResponse(status=403)
         try:
             order = ecommerce_api_client(request.user).orders(number).get()
             return JsonResponse(order)

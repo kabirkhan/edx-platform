@@ -57,7 +57,10 @@ from xmodule.modulestore.django import modulestore
 
 log = logging.getLogger(__name__)
 
-DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH = 'verify_student_disable_account_activation_requirement'
+DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH = configuration_helpers.get_value(
+    'DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH',
+    settings.DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH
+)
 
 
 class PayAndVerifyView(View):
@@ -205,10 +208,7 @@ class PayAndVerifyView(View):
         Arguments:
             user (User): Current user involved in the onboarding/verification flow
         """
-        user_is_active = user.is_active
-        if waffle.switch_is_active(DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH):
-            user_is_active = True
-        return user_is_active
+        return user.is_active or waffle.switch_is_active(DISABLE_ACCOUNT_ACTIVATION_REQUIREMENT_SWITCH)
 
     @method_decorator(login_required)
     def get(
