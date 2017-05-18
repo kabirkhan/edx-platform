@@ -1,5 +1,6 @@
 """
-Command to compute all grades for specified courses.
+Command to recalculate grades for all subsections with problem submissions
+in the specified time range.
 """
 
 from __future__ import absolute_import, division, print_function, unicode_literals
@@ -8,7 +9,7 @@ from datetime import datetime
 import logging
 from pytz import utc
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from lms.djangoapps.grades.constants import ScoreDatabaseTableEnum
 from lms.djangoapps.grades.tasks import recalculate_subsection_grade_v3
 from courseware.models import StudentModule
@@ -56,6 +57,12 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if 'modified_start' not in options:
+            raise CommandError('modified_start must be provided.')
+
+        if 'modified_end' not in options:
+            raise CommandError('modified_end must be provided.')
+
         modified_start = utc.localize(datetime.strptime(options['modified_start'], DATE_FORMAT))
         modified_end = utc.localize(datetime.strptime(options['modified_end'], DATE_FORMAT))
         event_transaction_id = create_new_event_transaction_id()
