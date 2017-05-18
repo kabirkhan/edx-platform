@@ -1,0 +1,28 @@
+// ------------------------------
+// Breadcrumb styles
+//
+// Mirrors styles from the Pattern Library
+
+.breadcrumbs {
+  font-size: font-size(small);
+  line-height: line-height(small);
+
+  .nav-item {
+    @include margin-left($baseline/4);
+    display: inline-block;
+
+    a:visited {
+      color: $uxpl-blue-base;
+    }
+  }
+
+  .fa-angle-right {
+    @include margin-left($baseline/4);
+    display: inline-block;
+    color: $base-font-color;
+
+    @include rtl {
+      @include transform(rotateY(180deg));
+    }
+  }
+}
