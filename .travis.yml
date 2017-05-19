@@ -4,7 +4,7 @@ python:
 # command to install dependencies
 install: 
 #"pip install -r requirements.txt"
-  - npm install
+  #- npm install
 
   - pip install setuptools
   - pip install --exists-action w -r requirements/edx/paver.txt
