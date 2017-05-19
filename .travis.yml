@@ -29,7 +29,7 @@ install:
   - if [ -e requirements/edx/post.txt ]; then pip install --exists-action w -r requirements/edx/post.txt ; fi
 
 # command to run tests
-script: ./scripts/generic-ci-tests.sh
+script: ./scripts/travis-tests.sh
 
 dist: trusty
 sudo: required
