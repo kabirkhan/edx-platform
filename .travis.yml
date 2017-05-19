@@ -25,6 +25,7 @@ install:
   - pip install --exists-action w -r requirements/edx/base.txt
   - sudo apt-get install libxmlsec1
   - if [ -e requirements/edx/post.txt ]; then pip install --exists-action w -r requirements/edx/post.txt ; fi
+  - ls
 
 # command to run tests
 script: ./scripts/all_tests.sh
