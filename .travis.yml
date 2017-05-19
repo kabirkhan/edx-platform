@@ -29,7 +29,7 @@ install:
   - if [ -e requirements/edx/post.txt ]; then pip install --exists-action w -r requirements/edx/post.txt ; fi
 
 # command to run tests
-script: kabirkhan/edx-platform/scripts/all_tests.sh
+script: ./scripts/all-tests.sh
 
 dist: trusty
 sudo: required
