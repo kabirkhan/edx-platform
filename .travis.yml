@@ -27,10 +27,9 @@ install:
   - sudo apt-get install libxmlsec1-dev
   - sudo apt-get install swig
   - if [ -e requirements/edx/post.txt ]; then pip install --exists-action w -r requirements/edx/post.txt ; fi
-  - ls
 
 # command to run tests
-script: ./scripts/all_tests.sh
+script: kabirkhan/edx-platform/scripts/all_tests.sh
 
 dist: trusty
 sudo: required
