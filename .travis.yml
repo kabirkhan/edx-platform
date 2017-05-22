@@ -2,7 +2,7 @@ language: python
 python:
   - "2.7"
   
-- env:
+env:
   - TRAVIS_NODE_VERSION="6.9.4"
 # command to install dependencies
 install:   
