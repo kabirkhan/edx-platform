@@ -1,10 +1,14 @@
 language: python
 python:
   - "2.7"
+  
+- env:
+  - TRAVIS_NODE_VERSION="6.9.4"
 # command to install dependencies
 install: 
-#"pip install -r requirements.txt"
-  #- npm install
+  
+  - rm -rf ~/.nvm && git clone https://github.com/creationix/nvm.git ~/.nvm && (cd ~/.nvm && git checkout `git describe --abbrev=0 --tags`) && source ~/.nvm/nvm.sh && nvm install $TRAVIS_NODE_VERSION
+  - npm install
 
   - pip install setuptools
   - pip install --exists-action w -r requirements/edx/paver.txt
@@ -30,6 +34,7 @@ install:
 
 # command to run tests
 script: 
+  - EXIT=0
   - echo "Running tests for common/lib/ and pavelib/"
   - paver test_lib --with-flaky --cov-args="-p" --with-xunitmp || EXIT=1
 
