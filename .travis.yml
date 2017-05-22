@@ -29,7 +29,9 @@ install:
   - if [ -e requirements/edx/post.txt ]; then pip install --exists-action w -r requirements/edx/post.txt ; fi
 
 # command to run tests
-script: ./scripts/travis-tests.sh
+script: 
+  - echo "Running tests for common/lib/ and pavelib/"
+  - paver test_lib --with-flaky --cov-args="-p" --with-xunitmp || EXIT=1
 
 dist: trusty
 sudo: required
