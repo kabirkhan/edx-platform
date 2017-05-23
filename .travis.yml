@@ -53,9 +53,7 @@ script:
   - EXIT=0
   - echo "Running tests for common/lib/ and pavelib/"
   - paver test_lib --extra_args="--with-flaky" --cov_args="-p" || EXIT=1
-  - echo "Running python tests for Studio"
-  - paver test_system -s $TEST_SUITE --extra_args="--with-flaky" --cov_args="-p" || EXIT=1
-  - echo "Running python tests for lms"
+  - echo "Running python tests for $TEST_SUITE"
   - paver test_system -s $TEST_SUITE --extra_args="--with-flaky" --cov_args="-p" || EXIT=1
   - exit $EXIT
 
