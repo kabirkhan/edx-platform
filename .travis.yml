@@ -41,6 +41,12 @@ script:
   - EXIT=0
   - echo "Running tests for common/lib/ and pavelib/"
   - paver test_lib --with-flaky --cov-args="-p" --with-xunitmp || EXIT=1
+  - paver test_lib --extra_args="--with-flaky" --cov_args="-p" || EXIT=1
+  - echo "Running python tests for Studio"
+  - paver test_system -s cms --extra_args="--with-flaky" --cov_args="-p" || EXIT=1
+  - echo "Running python tests for lms"
+  - paver test_system -s lms --extra_args="--with-flaky" --cov_args="-p" || EXIT=1
+  - exit $EXIT
 
 dist: trusty
 sudo: required
