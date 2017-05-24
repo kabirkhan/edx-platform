@@ -12,6 +12,8 @@ services:
   - memcached
   
 env:
+  - TEST_SUITE="quality"
+  - TEST_SUITE="lib"
   - TEST_SUITE="cms"
   - TEST_SUITE="lms"
 
@@ -25,10 +27,10 @@ branches:
   - oxa/master.fic
   - oxa/devfic
 
-before_install:
-  - docker run ubuntu:16.04 -name ubuntu_edxapp
-  - docker ps -a 
-  - docker attach ubuntu_edxapp
+# before_install:
+#   - docker run ubuntu:16.04 -name ubuntu_edxapp
+#   - docker ps -a 
+#   - docker attach ubuntu_edxapp
 
 # command to install dependencies
 install:   
