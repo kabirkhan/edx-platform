@@ -26,7 +26,7 @@ branches:
   - oxa/devfic
 
 before_install:
-  - docker run ubuntu:16.04 -name ubuntu_edxapp user/ubuntu
+  - docker run ubuntu:16.04 -name ubuntu_edxapp
   - docker ps -a 
   - docker attach ubuntu_edxapp
 
