@@ -17,9 +17,9 @@ env:
   - TEST_SUITE="cms"
   - TEST_SUITE="lms"
   - TEST_SUITE="js-unit"
-  - TEST_SUITE="commonlib-js-unit"
-  - TEST_SUITE="cms-acceptance"
-  - TEST_SUITE="lms-acceptance"
+  # - TEST_SUITE="commonlib-js-unit"
+  # - TEST_SUITE="cms-acceptance"
+  # - TEST_SUITE="lms-acceptance"
 cache:
   - npm
   - pip

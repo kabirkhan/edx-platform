@@ -34,6 +34,7 @@ function emptyxunit {
 <testcase classname="$1" name="$1" time="0.604"></testcase>
 </testsuite>
 END
+}
 
 case "$TEST_SUITE" in
 
