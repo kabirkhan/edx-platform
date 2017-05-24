@@ -39,17 +39,18 @@ case "$TEST_SUITE" in
         echo "Running diff quality."
         paver run_quality -p 100 || EXIT=1
 
-        # Need to create an empty test result so the post-build
-        # action doesn't fail the build.
-        emptyxunit "quality"
-        exit $EXIT
+        # # Need to create an empty test result so the post-build
+        # # action doesn't fail the build.
+        # emptyxunit "quality"
         ;;
     "lms")
         paver test_system -s $TEST_SUITE --with-flaky --cov-args="-p" --with-xunitmp || EXIT=1
+        ;;
     "cms")
         paver test_system -s $TEST_SUITE --with-flaky --cov-args="-p" --with-xunitmp || EXIT=1
+        ;;
     "lib")
         paver test_lib --with-flaky --cov-args="-p" -v --with-xunit
         ;;
 
-exit EXIT;
+exit $EXIT;
