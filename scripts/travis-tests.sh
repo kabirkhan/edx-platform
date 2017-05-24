@@ -42,15 +42,16 @@ case "$TEST_SUITE" in
         # # Need to create an empty test result so the post-build
         # # action doesn't fail the build.
         # emptyxunit "quality"
+        exit $EXIT
         ;;
     "lms")
-        paver test_system -s $TEST_SUITE --with-flaky --cov-args="-p" --with-xunitmp || EXIT=1
+        paver test_system -s $TEST_SUITE $PAVER_ARGS
         ;;
     "cms")
-        paver test_system -s $TEST_SUITE --with-flaky --cov-args="-p" --with-xunitmp || EXIT=1
+        paver test_system -s $TEST_SUITE $PAVER_ARGS
         ;;
     "lib")
         paver test_lib --with-flaky --cov-args="-p" -v --with-xunit
         ;;
 
-exit $EXIT;
+esac
