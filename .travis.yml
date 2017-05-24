@@ -1,7 +1,11 @@
 language: python
 python:
   - "2.7"
+
+sudo: required
+
 services:
+  - docker
   - mongodb
   - mysql
   - rabbitmq
@@ -20,6 +24,10 @@ branches:
   - master
   - oxa/master.fic
   - oxa/devfic
+
+before_install:
+  - docker run ubuntu:16.04
+  - docker ps -a 
 
 # command to install dependencies
 install:   
@@ -49,12 +57,4 @@ install:
   - if [ -e requirements/edx/post.txt ]; then pip install --exists-action w -r requirements/edx/post.txt ; fi
 
 # command to run tests
-script: 
-  - EXIT=0
-  - echo "Running tests for common/lib/ and pavelib/"
-  - paver test_lib --extra_args="--with-flaky" --cov_args="-p" || EXIT=1
-  - echo "Running python tests for $TEST_SUITE"
-  - paver test_system -s $TEST_SUITE --extra_args="--with-flaky" --cov_args="-p" || EXIT=1
-  - exit $EXIT
-
-dist: trusty
+script: ./scripts/travis-tests.sh
