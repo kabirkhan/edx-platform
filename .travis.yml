@@ -8,6 +8,7 @@ services:
   - memcached
   
 env:
+  - TEST_SUITE="quality"
   - TEST_SUITE="lib"
   - TEST_SUITE="cms-unit"
   - TEST_SUITE="lms-unit"
