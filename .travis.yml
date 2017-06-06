@@ -14,14 +14,9 @@ env:
   - TEST_SUITE="lms-unit"
 
 cache:
-  - npm
-  - pip
-
-branches:
-  only:
-  - master
-  - oxa/master.fic
-  - oxa/devfic
+  pip: true,
+  directories:
+    - node_modules
 
 # command to install dependencies
 install:   
