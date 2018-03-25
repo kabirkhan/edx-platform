@@ -16,13 +16,16 @@ from openedx.core.djangolib.markup import HTML, Text
           ${_("Activate your account!")}
         </span>
         <p class="status-note">${Text(_(
-          "Check your {email_start}{email}{email_end} inbox for an account activation link from edX. "
-          "If you need help, contact {link_start}edX Support{link_end}."
+          "Check your {email_start}{email}{email_end} inbox for an account activation link from {platform_name}. "
+          "If you need help, contact {link_start}{platform_name} Support{link_end}."
         )).format(
+          platform_name=platform_name,
           email_start=HTML("<strong>"),
           email_end=HTML("</strong>"),
           email=email,
-          link_start=HTML("<a target='_blank' href='https://support.edx.org/hc/en-us/articles/227340127-Why-haven-t-I-received-my-activation-email-'>"),
+          link_start=HTML("<a target='_blank' href='{activation_email_support_link}'>").format(
+            activation_email_support_link=activation_email_support_link,
+          ),
           link_end=HTML("</a>"),
         )}
         </p>

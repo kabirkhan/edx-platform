@@ -4,43 +4,57 @@ End-to-end tests for the LMS Instructor Dashboard.
 """
 
 import ddt
-
-from nose.plugins.attrib import attr
 from bok_choy.promise import EmptyPromise
-from flaky import flaky
+from nose.plugins.attrib import attr
 
-from common.test.acceptance.tests.helpers import UniqueCourseTest, get_modal_alert, EventsTestMixin
-from common.test.acceptance.pages.common.logout import LogoutPage
-from common.test.acceptance.pages.lms.auto_auth import AutoAuthPage
-from common.test.acceptance.pages.studio.overview import CourseOutlinePage as StudioCourseOutlinePage
-from common.test.acceptance.pages.lms.create_mode import ModeCreationPage
-from common.test.acceptance.pages.lms.courseware import CoursewarePage
-from common.test.acceptance.pages.lms.instructor_dashboard import (
-    InstructorDashboardPage,
-    EntranceExamAdmin,
-    StudentSpecificAdmin,
-)
-from common.test.acceptance.fixtures.course import CourseFixture, XBlockFixtureDesc
-from common.test.acceptance.pages.lms.dashboard import DashboardPage
-from common.test.acceptance.pages.lms.problem import ProblemPage
-from common.test.acceptance.pages.lms.pay_and_verify import PaymentAndVerificationFlow
-from common.test.acceptance.pages.lms.login_and_register import CombinedLoginAndRegisterPage
-from common.test.acceptance.pages.common.utils import enroll_user_track
-from common.test.acceptance.tests.helpers import disable_animations, create_multiple_choice_problem
 from common.test.acceptance.fixtures.certificates import CertificateConfigFixture
+from common.test.acceptance.fixtures.course import CourseFixture, XBlockFixtureDesc
+from common.test.acceptance.pages.common.auto_auth import AutoAuthPage
+from common.test.acceptance.pages.common.logout import LogoutPage
+from common.test.acceptance.pages.common.utils import enroll_user_track
+from common.test.acceptance.pages.lms.courseware import CoursewarePage
+from common.test.acceptance.pages.lms.create_mode import ModeCreationPage
+from common.test.acceptance.pages.lms.dashboard import DashboardPage
+from common.test.acceptance.pages.lms.instructor_dashboard import (
+    EntranceExamAdmin,
+    InstructorDashboardPage,
+    StudentAdminPage,
+    StudentSpecificAdmin
+)
+from common.test.acceptance.pages.lms.login_and_register import CombinedLoginAndRegisterPage
+from common.test.acceptance.pages.lms.problem import ProblemPage
+from common.test.acceptance.pages.studio.overview import CourseOutlinePage as StudioCourseOutlinePage
+from common.test.acceptance.tests.helpers import (
+    EventsTestMixin,
+    UniqueCourseTest,
+    create_multiple_choice_problem,
+    disable_animations,
+    get_modal_alert
+)
 
 
 class BaseInstructorDashboardTest(EventsTestMixin, UniqueCourseTest):
     """
     Mixin class for testing the instructor dashboard.
     """
-    def log_in_as_instructor(self):
+    def log_in_as_instructor(self, global_staff=True, course_access_roles=None):
         """
-        Logs in as an instructor and returns the id.
+        Login with an instructor account.
+
+        Args:
+            course_access_roles (str[]): List of course access roles that should be assigned to the user.
+
+        Returns
+            username (str)
+            user_id (int)
         """
-        username = "test_instructor_{uuid}".format(uuid=self.unique_id[0:6])
-        auto_auth_page = AutoAuthPage(self.browser, username=username, course_id=self.course_id, staff=True)
-        return username, auto_auth_page.visit().get_user_id()
+        course_access_roles = course_access_roles or []
+        auto_auth_page = AutoAuthPage(
+            self.browser, course_id=self.course_id, staff=global_staff, course_access_roles=course_access_roles
+        )
+        auto_auth_page.visit()
+        user_info = auto_auth_page.user_info
+        return user_info['username'], user_info['user_id']
 
     def visit_instructor_dashboard(self):
         """
@@ -123,38 +137,6 @@ class AutoEnrollmentWithCSVTest(BaseInstructorDashboardTest):
         """
         self.assertTrue(self.auto_enroll_section.is_file_attachment_browse_button_visible())
         self.assertTrue(self.auto_enroll_section.is_upload_button_visible())
-
-    def test_enroll_unregister_student(self):
-        """
-        Scenario: On the Membership tab of the Instructor Dashboard, Batch Enrollment div is visible.
-            Given that I am on the Membership tab on the Instructor Dashboard
-            Then I enter the email and enroll it.
-            Logout the current page.
-            And Navigate to the registration page and register the student.
-            Then I see the course which enrolled the student.
-        """
-        username = "test_{uuid}".format(uuid=self.unique_id[0:6])
-        email = "{user}@example.com".format(user=username)
-        self.auto_enroll_section.fill_enrollment_batch_text_box(email)
-        self.assertIn(
-            'Successfully sent enrollment emails to the following users. '
-            'They will be enrolled once they register:',
-            self.auto_enroll_section.get_notification_text()
-        )
-        LogoutPage(self.browser).visit()
-        self.register_page.visit()
-        self.register_page.register(
-            email=email,
-            password="123456",
-            username=username,
-            full_name="Test User",
-            terms_of_service=True,
-            country="US",
-            favorite_movie="Harry Potter",
-        )
-        course_names = self.dashboard_page.wait_for_page().available_courses
-        self.assertEquals(len(course_names), 1)
-        self.assertIn(self.course_info["display_name"], course_names)
 
     def test_clicking_file_upload_button_without_file_shows_error(self):
         """
@@ -381,35 +363,7 @@ class ProctoredExamsTest(BaseInstructorDashboardTest):
 
         # Stop the timed exam.
         self.courseware_page.stop_timed_exam()
-
-    def test_can_add_remove_allowance(self):
-        """
-        Make sure that allowances can be added and removed.
-        """
-        # Given that an exam has been configured to be a timed exam.
-        self._create_a_timed_exam_and_attempt()
-
-        # When I log in as an instructor,
-        __, __ = self.log_in_as_instructor()
-
-        # And visit the Allowance Section of Instructor Dashboard's Special Exams tab
-        instructor_dashboard_page = self.visit_instructor_dashboard()
-        allowance_section = instructor_dashboard_page.select_special_exams().select_allowance_section()
-
-        # Then I can add Allowance to that exam for a student
-        self.assertTrue(allowance_section.is_add_allowance_button_visible)
-
-        # When I click the Add Allowance button
-        allowance_section.click_add_allowance_button()
-
-        # Then popup should be visible
-        self.assertTrue(allowance_section.is_add_allowance_popup_visible)
-
-        # When I fill and submit the allowance form
-        allowance_section.submit_allowance_form('10', self.USERNAME)
-
-        # Then, the added record should be visible
-        self.assertTrue(allowance_section.is_allowance_record_visible)
+        LogoutPage(self.browser).visit()
 
     def test_can_reset_attempts(self):
         """
@@ -1255,23 +1209,11 @@ class EcommerceTest(BaseInstructorDashboardTest):
         )
         course_fixture.install()
 
-    def log_in_as_unique_user(self):
-        """
-        Log in as a valid lms user.
-        """
-        AutoAuthPage(
-            self.browser,
-            username="test_instructor",
-            email="test_instructor@example.com",
-            password="password",
-            course_id=self.course_id
-        ).visit()
-
     def visit_ecommerce_section(self):
         """
         Log in to visit Instructor dashboard and click E-commerce tab
         """
-        self.log_in_as_unique_user()
+        self.log_in_as_instructor(course_access_roles=['finance_admin'])
         instructor_dashboard_page = self.visit_instructor_dashboard()
         return instructor_dashboard_page.select_ecommerce_tab()
 
@@ -1371,15 +1313,6 @@ class StudentAdminTest(BaseInstructorDashboardTest):
         self.username, _ = self.log_in_as_instructor()
         self.instructor_dashboard_page = self.visit_instructor_dashboard()
 
-    def test_rescore_nonrescorable(self):
-        student_admin_section = self.instructor_dashboard_page.select_student_admin(StudentSpecificAdmin)
-        student_admin_section.set_student_email_or_username(self.username)
-
-        # not a rescorable block
-        student_admin_section.set_problem_location(self.vertical.locator)
-        getattr(student_admin_section, 'rescore_button').click()
-        self.assertTrue(self.instructor_dashboard_page.is_rescore_unsupported_message_visible())
-
     def test_rescore_rescorable(self):
         student_admin_section = self.instructor_dashboard_page.select_student_admin(StudentSpecificAdmin)
         student_admin_section.set_student_email_or_username(self.username)
@@ -1388,3 +1321,20 @@ class StudentAdminTest(BaseInstructorDashboardTest):
         alert = get_modal_alert(student_admin_section.browser)
         alert.dismiss()
         self.assertFalse(self.instructor_dashboard_page.is_rescore_unsupported_message_visible())
+
+    def test_task_list_visibility(self):
+        """
+        Test that instructor task list is visible on student admin section
+        to users who have access to instructor tab/dashboard
+        """
+        # first check for global staff users
+        student_admin_section = self.instructor_dashboard_page.select_student_admin(StudentAdminPage)
+        self.assertTrue(student_admin_section.running_tasks_section.visible)
+
+        # logout global-staff user and check for users with staff access to course
+        LogoutPage(self.browser).visit()
+        # having staff access to course is compulsory to access instructor dashboard
+        self.log_in_as_instructor(False, ['staff'])
+        self.instructor_dashboard_page = self.visit_instructor_dashboard()
+        student_admin_section = self.instructor_dashboard_page.select_student_admin(StudentAdminPage)
+        self.assertTrue(student_admin_section.running_tasks_section.visible)

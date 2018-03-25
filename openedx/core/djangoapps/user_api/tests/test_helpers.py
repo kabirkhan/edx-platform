@@ -9,6 +9,8 @@ from django import forms
 from django.http import HttpRequest, HttpResponse
 from django.test import TestCase
 from nose.tools import raises
+from six import text_type
+
 from ..helpers import (
     intercept_errors, shim_student_view,
     FormDescription, InvalidFieldError
@@ -60,13 +62,13 @@ class InterceptErrorsTest(TestCase):
             u"keyword arguments '{{'raise_error': <class '{}'>}}' "
             u"from File \"{}\", line XXX, in test_logs_errors\n"
             u"    intercepted_function(raise_error=FakeInputException): FakeInputException()"
-        ).format(exception, __file__)
+        ).format(exception, __file__.rstrip('c'))
 
         # Verify that the raised exception has the error message
         try:
             intercepted_function(raise_error=FakeInputException)
         except FakeOutputException as ex:
-            actual_message = re.sub(r'line \d+', 'line XXX', ex.message, flags=re.MULTILINE)
+            actual_message = re.sub(r'line \d+', 'line XXX', text_type(ex), flags=re.MULTILINE)
             self.assertEqual(actual_message, expected_log_msg)
 
         # Verify that the error logger is called
@@ -146,6 +148,44 @@ class FormDescriptionTest(TestCase):
         desc = FormDescription("post", "/submit")
         with self.assertRaises(InvalidFieldError):
             desc.add_field("name", field_type="text", restrictions={"invalid": 0})
+
+    def test_option_overrides(self):
+        desc = FormDescription("post", "/submit")
+        field = {
+            "name": "country",
+            "label": "Country",
+            "field_type": "select",
+            "default": "PK",
+            "required": True,
+            "error_messages": {
+                "required": "You must provide a value!"
+            },
+            "options": [
+                ("US", "United States of America"),
+                ("PK", "Pakistan")
+            ]
+        }
+        desc.override_field_properties(
+            field["name"],
+            default="PK"
+        )
+        desc.add_field(**field)
+        self.assertEqual(
+            desc.fields[0]["options"],
+            [
+                {
+                    'default': False,
+                    'name': 'United States of America',
+                    'value': 'US'
+                },
+                {
+                    'default': True,
+                    'name': 'Pakistan',
+                    'value': 'PK'
+                }
+
+            ]
+        )
 
 
 @ddt.ddt

@@ -6,13 +6,15 @@ import ddt
 import unittest
 import httpretty
 import json
-import time
+import logging
 from mock import patch
 from freezegun import freeze_time
-from social.apps.django_app.default.models import UserSocialAuth
+from social_django.models import UserSocialAuth
+from testfixtures import LogCapture
 from unittest import skip
 
-from third_party_auth.saml import log as saml_log
+from openedx.tests.util import expected_redirect_url
+from third_party_auth.saml import log as saml_log, SapSuccessFactorsIdentityProvider
 from third_party_auth.tasks import fetch_saml_metadata
 from third_party_auth.tests import testutil
 
@@ -48,6 +50,9 @@ class SamlIntegrationTestUtilities(object):
         )
         # Mock out HTTP requests that may be made to TestShib:
         httpretty.enable()
+        httpretty.reset()
+        self.addCleanup(httpretty.reset)
+        self.addCleanup(httpretty.disable)
 
         def metadata_callback(_request, _uri, headers):
             """ Return a cached copy of TestShib's metadata by reading it from disk """
@@ -65,8 +70,6 @@ class SamlIntegrationTestUtilities(object):
             content_type='text/xml',
             body=cache_duration_metadata_callback
         )
-        self.addCleanup(httpretty.disable)
-        self.addCleanup(httpretty.reset)
 
         # Configure the SAML library to use the same request ID for every request.
         # Doing this and freezing the time allows us to play back recorded request/response pairs
@@ -119,7 +122,7 @@ class SamlIntegrationTestUtilities(object):
 
 
 @ddt.ddt
-@unittest.skipUnless(testutil.AUTH_FEATURE_ENABLED, 'third_party_auth not enabled')
+@unittest.skipUnless(testutil.AUTH_FEATURE_ENABLED, testutil.AUTH_FEATURES_KEY + ' not enabled')
 class TestShibIntegrationTest(SamlIntegrationTestUtilities, IntegrationTestMixin, testutil.SAMLTestCase):
     """
     TestShib provider Integration Test, to test SAML functionality
@@ -133,7 +136,7 @@ class TestShibIntegrationTest(SamlIntegrationTestUtilities, IntegrationTestMixin
         try_login_response = self.client.get(testshib_login_url)
         # The user should be redirected to back to the login page:
         self.assertEqual(try_login_response.status_code, 302)
-        self.assertEqual(try_login_response['Location'], self.url_prefix + self.login_page_url)
+        self.assertEqual(try_login_response['Location'], expected_redirect_url(self.login_page_url, hostname=self.hostname))
         # When loading the login page, the user will see an error message:
         response = self.client.get(self.login_page_url)
         self.assertEqual(response.status_code, 200)
@@ -157,7 +160,7 @@ class TestShibIntegrationTest(SamlIntegrationTestUtilities, IntegrationTestMixin
         record = UserSocialAuth.objects.get(
             user=self.user, provider=self.PROVIDER_BACKEND, uid__startswith=self.PROVIDER_IDP_SLUG
         )
-        attributes = record.extra_data["attributes"]
+        attributes = record.extra_data
         self.assertEqual(
             attributes.get("urn:oid:1.3.6.1.4.1.5923.1.1.1.9"), ["Member@testshib.org", "Staff@testshib.org"]
         )
@@ -232,7 +235,7 @@ class TestShibIntegrationTest(SamlIntegrationTestUtilities, IntegrationTestMixin
             self._test_return_login(previous_session_timed_out=True)
 
 
-@unittest.skipUnless(testutil.AUTH_FEATURE_ENABLED, 'third_party_auth not enabled')
+@unittest.skipUnless(testutil.AUTH_FEATURE_ENABLED, testutil.AUTH_FEATURES_KEY + ' not enabled')
 class SuccessFactorsIntegrationTest(SamlIntegrationTestUtilities, IntegrationTestMixin, testutil.SAMLTestCase):
     """
     Test basic SAML capability using the TestShib details, and then check that we're able
@@ -310,11 +313,34 @@ class SuccessFactorsIntegrationTest(SamlIntegrationTestUtilities, IntegrationTes
                         'lastName': 'Smith',
                         'defaultFullName': 'John Smith',
                         'email': 'john@smith.com',
+                        'country': 'Australia',
                     }
                 })
             )
 
         httpretty.register_uri(httpretty.GET, ODATA_USER_URL, content_type='application/json', body=user_callback)
+
+    def _mock_odata_api_for_error(self, odata_api_root_url, username):
+        """
+        Mock an error response when calling the OData API for user details.
+        """
+
+        def callback(request, uri, headers):  # pylint: disable=unused-argument
+            """
+            Return a 500 error when someone tries to call the URL.
+            """
+            headers['CorrelationId'] = 'aefd38b7-c92c-445a-8c7a-487a3f0c7a9d'
+            headers['RequestNo'] = '[787177]'  # This is the format SAPSF returns for the transaction request number
+            return 500, headers, 'Failure!'
+
+        fields = ','.join(SapSuccessFactorsIdentityProvider.default_field_mapping.copy())
+        url = '{root_url}User(userId=\'{user_id}\')?$select={fields}'.format(
+            root_url=odata_api_root_url,
+            user_id=username,
+            fields=fields,
+        )
+        httpretty.register_uri(httpretty.GET, url, body=callback, content_type='application/json')
+        return url
 
     def test_register_insufficient_sapsf_metadata(self):
         """
@@ -332,23 +358,119 @@ class SuccessFactorsIntegrationTest(SamlIntegrationTestUtilities, IntegrationTes
         self.USER_USERNAME = "myself"
         super(SuccessFactorsIntegrationTest, self).test_register()
 
+    @patch.dict('django.conf.settings.REGISTRATION_EXTRA_FIELDS', country='optional')
     def test_register_sapsf_metadata_present(self):
         """
         Configure the provider such that it can talk to a mocked-out version of the SAP SuccessFactors
         API, and ensure that the data it gets that way gets passed to the registration form.
+
+        Check that value mappings overrides work in cases where we override a value other than
+        what we're looking for, and when an empty override is provided (expected behavior is that
+        existing value maps will be left alone).
         """
+        expected_country = 'AU'
+        provider_settings = {
+            'sapsf_oauth_root_url': 'http://successfactors.com/oauth/',
+            'sapsf_private_key': 'fake_private_key_here',
+            'odata_api_root_url': 'http://api.successfactors.com/odata/v2/',
+            'odata_company_id': 'NCC1701D',
+            'odata_client_id': 'TatVotSEiCMteSNWtSOnLanCtBGwNhGB',
+        }
+
         self._configure_testshib_provider(
             identity_provider_type='sap_success_factors',
             metadata_source=TESTSHIB_METADATA_URL,
-            other_settings=json.dumps({
-                'sapsf_oauth_root_url': 'http://successfactors.com/oauth/',
-                'sapsf_private_key': 'fake_private_key_here',
-                'odata_api_root_url': 'http://api.successfactors.com/odata/v2/',
-                'odata_company_id': 'NCC1701D',
-                'odata_client_id': 'TatVotSEiCMteSNWtSOnLanCtBGwNhGB',
-            })
+            other_settings=json.dumps(provider_settings)
         )
-        super(SuccessFactorsIntegrationTest, self).test_register()
+        super(SuccessFactorsIntegrationTest, self).test_register(country=expected_country)
+
+    @patch.dict('django.conf.settings.REGISTRATION_EXTRA_FIELDS', country='optional')
+    def test_register_sapsf_metadata_present_override_relevant_value(self):
+        """
+        Configure the provider such that it can talk to a mocked-out version of the SAP SuccessFactors
+        API, and ensure that the data it gets that way gets passed to the registration form.
+
+        Check that value mappings overrides work in cases where we override a value other than
+        what we're looking for, and when an empty override is provided (expected behavior is that
+        existing value maps will be left alone).
+        """
+        value_map = {'country': {'Australia': 'NZ'}}
+        expected_country = 'NZ'
+        provider_settings = {
+            'sapsf_oauth_root_url': 'http://successfactors.com/oauth/',
+            'sapsf_private_key': 'fake_private_key_here',
+            'odata_api_root_url': 'http://api.successfactors.com/odata/v2/',
+            'odata_company_id': 'NCC1701D',
+            'odata_client_id': 'TatVotSEiCMteSNWtSOnLanCtBGwNhGB',
+        }
+        if value_map:
+            provider_settings['sapsf_value_mappings'] = value_map
+
+        self._configure_testshib_provider(
+            identity_provider_type='sap_success_factors',
+            metadata_source=TESTSHIB_METADATA_URL,
+            other_settings=json.dumps(provider_settings)
+        )
+        super(SuccessFactorsIntegrationTest, self).test_register(country=expected_country)
+
+    @patch.dict('django.conf.settings.REGISTRATION_EXTRA_FIELDS', country='optional')
+    def test_register_sapsf_metadata_present_override_other_value(self):
+        """
+        Configure the provider such that it can talk to a mocked-out version of the SAP SuccessFactors
+        API, and ensure that the data it gets that way gets passed to the registration form.
+
+        Check that value mappings overrides work in cases where we override a value other than
+        what we're looking for, and when an empty override is provided (expected behavior is that
+        existing value maps will be left alone).
+        """
+        value_map = {'country': {'United States': 'blahfake'}}
+        expected_country = 'AU'
+        provider_settings = {
+            'sapsf_oauth_root_url': 'http://successfactors.com/oauth/',
+            'sapsf_private_key': 'fake_private_key_here',
+            'odata_api_root_url': 'http://api.successfactors.com/odata/v2/',
+            'odata_company_id': 'NCC1701D',
+            'odata_client_id': 'TatVotSEiCMteSNWtSOnLanCtBGwNhGB',
+        }
+        if value_map:
+            provider_settings['sapsf_value_mappings'] = value_map
+
+        self._configure_testshib_provider(
+            identity_provider_type='sap_success_factors',
+            metadata_source=TESTSHIB_METADATA_URL,
+            other_settings=json.dumps(provider_settings)
+        )
+        super(SuccessFactorsIntegrationTest, self).test_register(country=expected_country)
+
+    @patch.dict('django.conf.settings.REGISTRATION_EXTRA_FIELDS', country='optional')
+    def test_register_sapsf_metadata_present_empty_value_override(self):
+        """
+        Configure the provider such that it can talk to a mocked-out version of the SAP SuccessFactors
+        API, and ensure that the data it gets that way gets passed to the registration form.
+
+        Check that value mappings overrides work in cases where we override a value other than
+        what we're looking for, and when an empty override is provided (expected behavior is that
+        existing value maps will be left alone).
+        """
+
+        value_map = {'country': {}}
+        expected_country = 'AU'
+        provider_settings = {
+            'sapsf_oauth_root_url': 'http://successfactors.com/oauth/',
+            'sapsf_private_key': 'fake_private_key_here',
+            'odata_api_root_url': 'http://api.successfactors.com/odata/v2/',
+            'odata_company_id': 'NCC1701D',
+            'odata_client_id': 'TatVotSEiCMteSNWtSOnLanCtBGwNhGB',
+        }
+        if value_map:
+            provider_settings['sapsf_value_mappings'] = value_map
+
+        self._configure_testshib_provider(
+            identity_provider_type='sap_success_factors',
+            metadata_source=TESTSHIB_METADATA_URL,
+            other_settings=json.dumps(provider_settings)
+        )
+        super(SuccessFactorsIntegrationTest, self).test_register(country=expected_country)
 
     def test_register_http_failure(self):
         """
@@ -371,6 +493,41 @@ class SuccessFactorsIntegrationTest(SamlIntegrationTestUtilities, IntegrationTes
         self.USER_NAME = "Me Myself And I"
         self.USER_USERNAME = "myself"
         super(SuccessFactorsIntegrationTest, self).test_register()
+
+    def test_register_http_failure_in_odata(self):
+        """
+        Ensure that if there's an HTTP failure while fetching user details from
+        SAP SuccessFactors OData API.
+        """
+        # Because we're getting details from the assertion, fall back to the initial set of details.
+        self.USER_EMAIL = "myself@testshib.org"
+        self.USER_NAME = "Me Myself And I"
+        self.USER_USERNAME = "myself"
+
+        odata_company_id = 'NCC1701D'
+        odata_api_root_url = 'http://api.successfactors.com/odata/v2/'
+        mocked_odata_api_url = self._mock_odata_api_for_error(odata_api_root_url, self.USER_USERNAME)
+        self._configure_testshib_provider(
+            identity_provider_type='sap_success_factors',
+            metadata_source=TESTSHIB_METADATA_URL,
+            other_settings=json.dumps({
+                'sapsf_oauth_root_url': 'http://successfactors.com/oauth/',
+                'sapsf_private_key': 'fake_private_key_here',
+                'odata_api_root_url': odata_api_root_url,
+                'odata_company_id': odata_company_id,
+                'odata_client_id': 'TatVotSEiCMteSNWtSOnLanCtBGwNhGB',
+            })
+        )
+        with LogCapture(level=logging.WARNING) as log_capture:
+            super(SuccessFactorsIntegrationTest, self).test_register()
+            logging_messages = str([log_msg.getMessage() for log_msg in log_capture.records]).replace('\\', '')
+            self.assertIn(odata_company_id, logging_messages)
+            self.assertIn(mocked_odata_api_url, logging_messages)
+            self.assertIn(self.USER_USERNAME, logging_messages)
+            self.assertIn("SAPSuccessFactors", logging_messages)
+            self.assertIn("Error message", logging_messages)
+            self.assertIn("System message", logging_messages)
+            self.assertIn("Headers", logging_messages)
 
     @skip('Test not necessary for this subclass')
     def test_get_saml_idp_class_with_fake_identifier(self):

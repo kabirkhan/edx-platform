@@ -2,80 +2,63 @@
 Views handling read (GET) requests for the Discussion tab and inline discussions.
 """
 
-from functools import wraps
 import logging
-from sets import Set
+from functools import wraps
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.core.context_processors import csrf
-from django.core.urlresolvers import reverse
 from django.contrib.auth.models import User
 from django.contrib.staticfiles.storage import staticfiles_storage
+from django.template.context_processors import csrf
+from django.core.urlresolvers import reverse
 from django.http import Http404, HttpResponseServerError
 from django.shortcuts import render_to_response
 from django.template.loader import render_to_string
 from django.utils.translation import get_language_bidi
-from django.views.decorators.http import require_GET
-
-log = logging.getLogger("edx.discussions")
-try:
-    import newrelic.agent
-except ImportError:
-    newrelic = None  # pylint: disable=invalid-name
-
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.http import require_GET, require_http_methods
+from opaque_keys.edx.keys import CourseKey
 from rest_framework import status
-
 from web_fragments.fragment import Fragment
 
+import django_comment_client.utils as utils
+from lms.djangoapps.experiments.utils import get_experiment_user_metadata_context
+import lms.lib.comment_client as cc
+from courseware.access import has_access
 from courseware.courses import get_course_with_access
 from courseware.views.views import CourseTabView
-from openedx.core.djangoapps.course_groups.cohorts import (
-    is_course_cohorted,
-    get_course_cohorts,
+from django_comment_client.base.views import track_thread_viewed_event
+from django_comment_client.constants import TYPE_ENTRY
+from django_comment_client.permissions import get_team, has_permission
+from django_comment_client.utils import (
+    add_courseware_context,
+    available_division_schemes,
+    course_discussion_division_enabled,
+    extract,
+    get_group_id_for_comments_service,
+    get_group_id_for_user,
+    get_group_names_by_id,
+    is_commentable_divided,
+    merge_dict,
+    strip_none
 )
+from django_comment_common.utils import ThreadContext, get_course_discussion_settings, set_course_discussion_settings
 from openedx.core.djangoapps.plugin_api.views import EdxFragmentView
-
-from courseware.access import has_access
+from openedx.core.djangoapps.monitoring_utils import function_trace
 from student.models import CourseEnrollment
+from util.json_request import JsonResponse, expect_json
 from xmodule.modulestore.django import modulestore
 
-from django_comment_common.utils import ThreadContext
-from django_comment_client.permissions import has_permission, get_team
-from django_comment_client.utils import (
-    merge_dict,
-    extract,
-    strip_none,
-    add_courseware_context,
-    get_group_id_for_comments_service,
-    is_commentable_divided,
-    get_group_id_for_user,
-)
+from .config import USE_BOOTSTRAP_FLAG
 
-import django_comment_client.utils as utils
-import lms.lib.comment_client as cc
+log = logging.getLogger("edx.discussions")
 
-from opaque_keys.edx.keys import CourseKey
-
-from contextlib import contextmanager
 
 THREADS_PER_PAGE = 20
 INLINE_THREADS_PER_PAGE = 20
 PAGES_NEARBY_DELTA = 2
 
-
-@contextmanager
-def newrelic_function_trace(function_name):
-    """
-    A wrapper context manager newrelic.agent.FunctionTrace to no-op if the
-    newrelic package is not installed
-    """
-    if newrelic:
-        nr_transaction = newrelic.agent.current_transaction()
-        with newrelic.agent.FunctionTrace(nr_transaction, function_name):
-            yield
-    else:
-        yield
+BOOTSTRAP_DISCUSSION_CSS_PATH = 'css/discussion/lms-discussion-bootstrap.css'
 
 
 def make_course_settings(course, user):
@@ -83,11 +66,15 @@ def make_course_settings(course, user):
     Generate a JSON-serializable model for course settings, which will be used to initialize a
     DiscussionCourseSettings object on the client.
     """
+    course_discussion_settings = get_course_discussion_settings(course.id)
+    group_names_by_id = get_group_names_by_id(course_discussion_settings)
     return {
-        'is_cohorted': is_course_cohorted(course.id),
+        'is_discussion_division_enabled': course_discussion_division_enabled(course_discussion_settings),
         'allow_anonymous': course.allow_anonymous,
         'allow_anonymous_to_peers': course.allow_anonymous_to_peers,
-        'cohorts': [{"id": str(g.id), "name": g.name} for g in get_course_cohorts(course)],
+        'groups': [
+            {"id": str(group_id), "name": group_name} for group_id, group_name in group_names_by_id.iteritems()
+        ],
         'category_map': utils.get_discussion_category_map(course, user)
     }
 
@@ -214,18 +201,20 @@ def inline_discussion(request, course_key, discussion_id):
     except ValueError:
         return HttpResponseServerError("Invalid group_id")
 
-    with newrelic_function_trace("get_metadata_for_threads"):
+    with function_trace("get_metadata_for_threads"):
         annotated_content_info = utils.get_metadata_for_threads(course_key, threads, request.user, user_info)
 
     is_staff = has_permission(request.user, 'openclose_thread', course.id)
     threads = [utils.prepare_content(thread, course_key, is_staff) for thread in threads]
-    with newrelic_function_trace("add_courseware_context"):
+    with function_trace("add_courseware_context"):
         add_courseware_context(threads, course, request.user)
+    course_discussion_settings = get_course_discussion_settings(course.id)
 
     return utils.JsonResponse({
         'is_commentable_divided': is_commentable_divided(course_key, discussion_id),
         'discussion_data': threads,
         'user_info': user_info,
+        'user_group_id': get_group_id_for_user(request.user, course_discussion_settings),
         'annotated_content_info': annotated_content_info,
         'page': query_params['page'],
         'num_pages': query_params['num_pages'],
@@ -254,10 +243,10 @@ def forum_form_discussion(request, course_key):
         except ValueError:
             return HttpResponseServerError("Invalid group_id")
 
-        with newrelic_function_trace("get_metadata_for_threads"):
+        with function_trace("get_metadata_for_threads"):
             annotated_content_info = utils.get_metadata_for_threads(course_key, threads, request.user, user_info)
 
-        with newrelic_function_trace("add_courseware_context"):
+        with function_trace("add_courseware_context"):
             add_courseware_context(threads, course, request.user)
 
         return utils.JsonResponse({
@@ -290,12 +279,15 @@ def single_thread(request, course_key, discussion_id, thread_id):
         cc_user = cc.User.from_django_user(request.user)
         user_info = cc_user.to_dict()
         is_staff = has_permission(request.user, 'openclose_thread', course.id)
+        thread = _load_thread_for_viewing(
+            request,
+            course,
+            discussion_id=discussion_id,
+            thread_id=thread_id,
+            raise_event=True,
+        )
 
-        thread = _find_thread(request, course, discussion_id=discussion_id, thread_id=thread_id)
-        if not thread:
-            raise Http404
-
-        with newrelic_function_trace("get_annotated_content_infos"):
+        with function_trace("get_annotated_content_infos"):
             annotated_content_info = utils.get_annotated_content_infos(
                 course_key,
                 thread,
@@ -304,7 +296,7 @@ def single_thread(request, course_key, discussion_id, thread_id):
             )
 
         content = utils.prepare_content(thread.to_dict(), course_key, is_staff)
-        with newrelic_function_trace("add_courseware_context"):
+        with function_trace("add_courseware_context"):
             add_courseware_context([content], course, request.user)
 
         return utils.JsonResponse({
@@ -346,13 +338,42 @@ def _find_thread(request, course, discussion_id, thread_id):
     if thread_context == "course" and not utils.discussion_category_id_access(course, request.user, discussion_id):
         return None
 
-    # verify that the thread belongs to the requesting student's cohort
+    # verify that the thread belongs to the requesting student's group
     is_moderator = has_permission(request.user, "see_all_cohorts", course.id)
-    if is_commentable_divided(course.id, discussion_id) and not is_moderator:
-        user_group_id = get_group_id_for_user(request.user, course.id)
+    course_discussion_settings = get_course_discussion_settings(course.id)
+    if is_commentable_divided(course.id, discussion_id, course_discussion_settings) and not is_moderator:
+        user_group_id = get_group_id_for_user(request.user, course_discussion_settings)
         if getattr(thread, "group_id", None) is not None and user_group_id != thread.group_id:
             return None
 
+    return thread
+
+
+def _load_thread_for_viewing(request, course, discussion_id, thread_id, raise_event):
+    """
+    Loads the discussion thread with the specified ID and fires an
+    edx.forum.thread.viewed event.
+
+    Args:
+        request: The Django request.
+        course_id: The ID of the owning course.
+        discussion_id: The ID of the owning discussion.
+        thread_id: The ID of the thread.
+        raise_event: Whether an edx.forum.thread.viewed tracking event should
+                     be raised
+
+    Returns:
+        The thread in question if the user can see it.
+
+    Raises:
+        Http404 if the thread does not exist or the user cannot
+        see it.
+    """
+    thread = _find_thread(request, course, discussion_id=discussion_id, thread_id=thread_id)
+    if not thread:
+        raise Http404
+    if raise_event:
+        track_thread_viewed_event(request, course, thread)
     return thread
 
 
@@ -365,6 +386,7 @@ def _create_base_discussion_view_context(request, course_key):
     user_info = cc_user.to_dict()
     course = get_course_with_access(user, 'load', course_key, check_if_enrolled=True)
     course_settings = make_course_settings(course, user)
+    uses_bootstrap = USE_BOOTSTRAP_FLAG.is_enabled()
     return {
         'csrf': csrf(request)['csrf_token'],
         'course': course,
@@ -381,24 +403,31 @@ def _create_base_discussion_view_context(request, course_key):
         ),
         'course_settings': course_settings,
         'disable_courseware_js': True,
-        'uses_pattern_library': True,
+        'uses_bootstrap': uses_bootstrap,
+        'uses_pattern_library': not uses_bootstrap,
     }
 
 
-def _create_discussion_board_context(request, course_key, discussion_id=None, thread_id=None):
+def _get_discussion_default_topic_id(course):
+    for topic, entry in course.discussion_topics.items():
+        if entry.get('default') is True:
+            return entry['id']
+
+
+def _create_discussion_board_context(request, base_context, thread=None):
     """
     Returns the template context for rendering the discussion board.
     """
-    context = _create_base_discussion_view_context(request, course_key)
+    context = base_context.copy()
     course = context['course']
+    course_key = course.id
+    thread_id = thread.id if thread else None
+    discussion_id = thread.commentable_id if thread else None
     course_settings = context['course_settings']
     user = context['user']
     cc_user = cc.User.from_django_user(user)
     user_info = context['user_info']
-    if thread_id:
-        thread = _find_thread(request, course, discussion_id=discussion_id, thread_id=thread_id)
-        if not thread:
-            raise Http404
+    if thread:
 
         # Since we're in page render mode, and the discussions UI will request the thread list itself,
         # we need only return the thread information for this one.
@@ -417,14 +446,15 @@ def _create_discussion_board_context(request, course_key, discussion_id=None, th
     is_staff = has_permission(user, 'openclose_thread', course.id)
     threads = [utils.prepare_content(thread, course_key, is_staff) for thread in threads]
 
-    with newrelic_function_trace("get_metadata_for_threads"):
+    with function_trace("get_metadata_for_threads"):
         annotated_content_info = utils.get_metadata_for_threads(course_key, threads, user, user_info)
 
-    with newrelic_function_trace("add_courseware_context"):
+    with function_trace("add_courseware_context"):
         add_courseware_context(threads, course, user)
 
-    with newrelic_function_trace("get_cohort_info"):
-        user_group_id = get_group_id_for_user(user, course_key)
+    with function_trace("get_cohort_info"):
+        course_discussion_settings = get_course_discussion_settings(course_key)
+        user_group_id = get_group_id_for_user(user, course_discussion_settings)
 
     context.update({
         'root_url': root_url,
@@ -434,14 +464,85 @@ def _create_discussion_board_context(request, course_key, discussion_id=None, th
         'thread_pages': thread_pages,
         'annotated_content_info': annotated_content_info,
         'is_moderator': has_permission(user, "see_all_cohorts", course_key),
-        'cohorts': course_settings["cohorts"],  # still needed to render _thread_list_template
+        'groups': course_settings["groups"],  # still needed to render _thread_list_template
         'user_group_id': user_group_id,  # read from container in NewPostView
         'sort_preference': cc_user.default_sort_key,
         'category_map': course_settings["category_map"],
         'course_settings': course_settings,
-        'is_commentable_divided': is_commentable_divided(course_key, discussion_id)
+        'is_commentable_divided': is_commentable_divided(course_key, discussion_id, course_discussion_settings),
+        # If the default topic id is None the front-end code will look for a topic that contains "General"
+        'discussion_default_topic_id': _get_discussion_default_topic_id(course),
     })
+    context.update(
+        get_experiment_user_metadata_context(
+            course,
+            user,
+        )
+    )
     return context
+
+
+def create_user_profile_context(request, course_key, user_id):
+    """ Generate a context dictionary for the user profile. """
+    user = cc.User.from_django_user(request.user)
+    course = get_course_with_access(request.user, 'load', course_key, check_if_enrolled=True)
+
+    # If user is not enrolled in the course, do not proceed.
+    django_user = User.objects.get(id=user_id)
+    if not CourseEnrollment.is_enrolled(django_user, course.id):
+        raise Http404
+
+    query_params = {
+        'page': request.GET.get('page', 1),
+        'per_page': THREADS_PER_PAGE,   # more than threads_per_page to show more activities
+    }
+
+    group_id = get_group_id_for_comments_service(request, course_key)
+    if group_id is not None:
+        query_params['group_id'] = group_id
+        profiled_user = cc.User(id=user_id, course_id=course_key, group_id=group_id)
+    else:
+        profiled_user = cc.User(id=user_id, course_id=course_key)
+
+    threads, page, num_pages = profiled_user.active_threads(query_params)
+    query_params['page'] = page
+    query_params['num_pages'] = num_pages
+
+    with function_trace("get_metadata_for_threads"):
+        user_info = cc.User.from_django_user(request.user).to_dict()
+        annotated_content_info = utils.get_metadata_for_threads(course_key, threads, request.user, user_info)
+
+    is_staff = has_permission(request.user, 'openclose_thread', course.id)
+    threads = [utils.prepare_content(thread, course_key, is_staff) for thread in threads]
+    with function_trace("add_courseware_context"):
+        add_courseware_context(threads, course, request.user)
+
+        # TODO: LEARNER-3854: If we actually implement Learner Analytics code, this
+        #   code was original protected to not run in user_profile() if is_ajax().
+        #   Someone should determine if that is still necessary (i.e. was that ever
+        #   called as is_ajax()) and clean this up as necessary.
+        user_roles = django_user.roles.filter(
+            course_id=course.id
+        ).order_by("name").values_list("name", flat=True).distinct()
+
+        with function_trace("get_cohort_info"):
+            course_discussion_settings = get_course_discussion_settings(course_key)
+            user_group_id = get_group_id_for_user(request.user, course_discussion_settings)
+
+        context = _create_base_discussion_view_context(request, course_key)
+        context.update({
+            'django_user': django_user,
+            'django_user_roles': user_roles,
+            'profiled_user': profiled_user.to_dict(),
+            'threads': threads,
+            'user_group_id': user_group_id,
+            'annotated_content_info': annotated_content_info,
+            'page': query_params['page'],
+            'num_pages': query_params['num_pages'],
+            'sort_preference': user.default_sort_key,
+            'learner_profile_page_url': reverse('learner_profile', kwargs={'username': django_user.username}),
+        })
+        return context
 
 
 @require_GET
@@ -452,74 +553,22 @@ def user_profile(request, course_key, user_id):
     Renders a response to display the user profile page (shown after clicking
     on a post author's username).
     """
-    user = cc.User.from_django_user(request.user)
-    course = get_course_with_access(request.user, 'load', course_key, check_if_enrolled=True)
-
     try:
-        # If user is not enrolled in the course, do not proceed.
-        django_user = User.objects.get(id=user_id)
-        if not CourseEnrollment.is_enrolled(django_user, course.id):
-            raise Http404
-
-        query_params = {
-            'page': request.GET.get('page', 1),
-            'per_page': THREADS_PER_PAGE,   # more than threads_per_page to show more activities
-        }
-
-        try:
-            group_id = get_group_id_for_comments_service(request, course_key)
-        except ValueError:
-            return HttpResponseServerError("Invalid group_id")
-        if group_id is not None:
-            query_params['group_id'] = group_id
-            profiled_user = cc.User(id=user_id, course_id=course_key, group_id=group_id)
-        else:
-            profiled_user = cc.User(id=user_id, course_id=course_key)
-
-        threads, page, num_pages = profiled_user.active_threads(query_params)
-        query_params['page'] = page
-        query_params['num_pages'] = num_pages
-
-        with newrelic_function_trace("get_metadata_for_threads"):
-            user_info = cc.User.from_django_user(request.user).to_dict()
-            annotated_content_info = utils.get_metadata_for_threads(course_key, threads, request.user, user_info)
-
-        is_staff = has_permission(request.user, 'openclose_thread', course.id)
-        threads = [utils.prepare_content(thread, course_key, is_staff) for thread in threads]
-        with newrelic_function_trace("add_courseware_context"):
-            add_courseware_context(threads, course, request.user)
+        context = create_user_profile_context(request, course_key, user_id)
         if request.is_ajax():
             return utils.JsonResponse({
-                'discussion_data': threads,
-                'page': query_params['page'],
-                'num_pages': query_params['num_pages'],
-                'annotated_content_info': annotated_content_info,
+                'discussion_data': context['threads'],
+                'page': context['page'],
+                'num_pages': context['num_pages'],
+                'annotated_content_info': context['annotated_content_info'],
             })
         else:
-            user_roles = django_user.roles.filter(
-                course_id=course.id
-            ).order_by("name").values_list("name", flat=True).distinct()
-
-            with newrelic_function_trace("get_cohort_info"):
-                user_group_id = get_group_id_for_user(request.user, course_key)
-
-            context = _create_base_discussion_view_context(request, course_key)
-            context.update({
-                'django_user': django_user,
-                'django_user_roles': user_roles,
-                'profiled_user': profiled_user.to_dict(),
-                'threads': threads,
-                'user_group_id': user_group_id,
-                'annotated_content_info': annotated_content_info,
-                'page': query_params['page'],
-                'num_pages': query_params['num_pages'],
-                'sort_preference': user.default_sort_key,
-                'learner_profile_page_url': reverse('learner_profile', kwargs={'username': django_user.username}),
-            })
-
-            return render_to_response('discussion/discussion_profile_page.html', context)
+            tab_view = CourseTabView()
+            return tab_view.get(request, unicode(course_key), 'discussion', profile_page_context=context)
     except User.DoesNotExist:
         raise Http404
+    except ValueError:
+        return HttpResponseServerError("Invalid group_id")
 
 
 @login_required
@@ -568,7 +617,7 @@ def followed_threads(request, course_key, user_id):
         query_params['num_pages'] = paginated_results.num_pages
         user_info = cc.User.from_django_user(request.user).to_dict()
 
-        with newrelic_function_trace("get_metadata_for_threads"):
+        with function_trace("get_metadata_for_threads"):
             annotated_content_info = utils.get_metadata_for_threads(
                 course_key,
                 paginated_results.collection,
@@ -606,7 +655,15 @@ class DiscussionBoardFragmentView(EdxFragmentView):
     """
     Component implementation of the discussion board.
     """
-    def render_to_fragment(self, request, course_id=None, discussion_id=None, thread_id=None, **kwargs):
+    def render_to_fragment(
+        self,
+        request,
+        course_id=None,
+        discussion_id=None,
+        thread_id=None,
+        profile_page_context=None,
+        **kwargs
+    ):
         """
         Render the discussion board to a fragment.
 
@@ -619,19 +676,36 @@ class DiscussionBoardFragmentView(EdxFragmentView):
         Returns:
             Fragment: The fragment representing the discussion board
         """
-        course_key = CourseKey.from_string(course_id)
         try:
-            context = _create_discussion_board_context(
-                request,
-                course_key,
-                discussion_id=discussion_id,
-                thread_id=thread_id,
+            course_key = CourseKey.from_string(course_id)
+            base_context = _create_base_discussion_view_context(request, course_key)
+            # Note:
+            #   After the thread is rendered in this fragment, an AJAX
+            #   request is made and the thread is completely loaded again
+            #   (yes, this is something to fix). Because of this, we pass in
+            #   raise_event=False to _load_thread_for_viewing avoid duplicate
+            #   tracking events.
+            thread = (
+                _load_thread_for_viewing(
+                    request,
+                    base_context['course'],
+                    discussion_id=discussion_id,
+                    thread_id=thread_id,
+                    raise_event=False,
+                )
+                if thread_id
+                else None
             )
-            html = render_to_string('discussion/discussion_board_fragment.html', context)
-            inline_js = render_to_string('discussion/discussion_board_js.template', context)
+            context = _create_discussion_board_context(request, base_context, thread=thread)
+            if profile_page_context:
+                # EDUCATOR-2119: styles are hard to reconcile if the profile page isn't also a fragment
+                html = render_to_string('discussion/discussion_profile_page.html', profile_page_context)
+            else:
+                html = render_to_string('discussion/discussion_board_fragment.html', context)
 
             fragment = Fragment(html)
             self.add_fragment_resource_urls(fragment)
+            inline_js = render_to_string('discussion/discussion_board_js.template', context)
             fragment.add_javascript(inline_js)
             if not settings.REQUIRE_DEBUG:
                 fragment.add_javascript_url(staticfiles_storage.url('discussion/js/discussion_board_factory.js'))
@@ -652,9 +726,7 @@ class DiscussionBoardFragmentView(EdxFragmentView):
         works in conjunction with the Django pipeline to ensure that in development mode
         the files are loaded individually, but in production just the single bundle is loaded.
         """
-        dependencies = Set()
-        dependencies.update(self.get_js_dependencies('discussion_vendor'))
-        return list(dependencies)
+        return list(set(self.get_js_dependencies('discussion_vendor')))
 
     def js_dependencies(self):
         """
@@ -674,7 +746,177 @@ class DiscussionBoardFragmentView(EdxFragmentView):
         works in conjunction with the Django pipeline to ensure that in development mode
         the files are loaded individually, but in production just the single bundle is loaded.
         """
-        if get_language_bidi():
+        is_right_to_left = get_language_bidi()
+        if USE_BOOTSTRAP_FLAG.is_enabled():
+            css_file = BOOTSTRAP_DISCUSSION_CSS_PATH
+            if is_right_to_left:
+                css_file = css_file.replace('.css', '-rtl.css')
+            return [css_file]
+        elif is_right_to_left:
             return self.get_css_dependencies('style-discussion-main-rtl')
         else:
             return self.get_css_dependencies('style-discussion-main')
+
+
+@expect_json
+@login_required
+def discussion_topics(request, course_key_string):
+    """
+    The handler for divided discussion categories requests.
+    This will raise 404 if user is not staff.
+
+    Returns the JSON representation of discussion topics w.r.t categories for the course.
+
+    Example:
+        >>> example = {
+        >>>               "course_wide_discussions": {
+        >>>                   "entries": {
+        >>>                       "General": {
+        >>>                           "sort_key": "General",
+        >>>                           "is_divided": True,
+        >>>                           "id": "i4x-edx-eiorguegnru-course-foobarbaz"
+        >>>                       }
+        >>>                   }
+        >>>                   "children": ["General", "entry"]
+        >>>               },
+        >>>               "inline_discussions" : {
+        >>>                   "subcategories": {
+        >>>                       "Getting Started": {
+        >>>                           "subcategories": {},
+        >>>                           "children": [
+        >>>                               ["Working with Videos", "entry"],
+        >>>                               ["Videos on edX", "entry"]
+        >>>                           ],
+        >>>                           "entries": {
+        >>>                               "Working with Videos": {
+        >>>                                   "sort_key": None,
+        >>>                                   "is_divided": False,
+        >>>                                   "id": "d9f970a42067413cbb633f81cfb12604"
+        >>>                               },
+        >>>                               "Videos on edX": {
+        >>>                                   "sort_key": None,
+        >>>                                   "is_divided": False,
+        >>>                                   "id": "98d8feb5971041a085512ae22b398613"
+        >>>                               }
+        >>>                           }
+        >>>                       },
+        >>>                       "children": ["Getting Started", "subcategory"]
+        >>>                   },
+        >>>               }
+        >>>          }
+    """
+    course_key = CourseKey.from_string(course_key_string)
+    course = get_course_with_access(request.user, 'staff', course_key)
+
+    discussion_topics = {}
+    discussion_category_map = utils.get_discussion_category_map(
+        course, request.user, divided_only_if_explicit=True, exclude_unstarted=False
+    )
+
+    # We extract the data for the course wide discussions from the category map.
+    course_wide_entries = discussion_category_map.pop('entries')
+
+    course_wide_children = []
+    inline_children = []
+
+    for name, c_type in discussion_category_map['children']:
+        if name in course_wide_entries and c_type == TYPE_ENTRY:
+            course_wide_children.append([name, c_type])
+        else:
+            inline_children.append([name, c_type])
+
+    discussion_topics['course_wide_discussions'] = {
+        'entries': course_wide_entries,
+        'children': course_wide_children
+    }
+
+    discussion_category_map['children'] = inline_children
+    discussion_topics['inline_discussions'] = discussion_category_map
+
+    return JsonResponse(discussion_topics)
+
+
+@require_http_methods(("GET", "PATCH"))
+@ensure_csrf_cookie
+@expect_json
+@login_required
+def course_discussions_settings_handler(request, course_key_string):
+    """
+    The restful handler for divided discussion setting requests. Requires JSON.
+    This will raise 404 if user is not staff.
+    GET
+        Returns the JSON representation of divided discussion settings for the course.
+    PATCH
+        Updates the divided discussion settings for the course. Returns the JSON representation of updated settings.
+    """
+    course_key = CourseKey.from_string(course_key_string)
+    course = get_course_with_access(request.user, 'staff', course_key)
+    discussion_settings = get_course_discussion_settings(course_key)
+
+    if request.method == 'PATCH':
+        divided_course_wide_discussions, divided_inline_discussions = get_divided_discussions(
+            course, discussion_settings
+        )
+
+        settings_to_change = {}
+
+        if 'divided_course_wide_discussions' in request.json or 'divided_inline_discussions' in request.json:
+            divided_course_wide_discussions = request.json.get(
+                'divided_course_wide_discussions', divided_course_wide_discussions
+            )
+            divided_inline_discussions = request.json.get(
+                'divided_inline_discussions', divided_inline_discussions
+            )
+            settings_to_change['divided_discussions'] = divided_course_wide_discussions + divided_inline_discussions
+
+        if 'always_divide_inline_discussions' in request.json:
+            settings_to_change['always_divide_inline_discussions'] = request.json.get(
+                'always_divide_inline_discussions'
+            )
+        if 'division_scheme' in request.json:
+            settings_to_change['division_scheme'] = request.json.get(
+                'division_scheme'
+            )
+
+        if not settings_to_change:
+            return JsonResponse({"error": unicode("Bad Request")}, 400)
+
+        try:
+            if settings_to_change:
+                discussion_settings = set_course_discussion_settings(course_key, **settings_to_change)
+
+        except ValueError as err:
+            # Note: error message not translated because it is not exposed to the user (UI prevents this state).
+            return JsonResponse({"error": unicode(err)}, 400)
+
+    divided_course_wide_discussions, divided_inline_discussions = get_divided_discussions(
+        course, discussion_settings
+    )
+
+    return JsonResponse({
+        'id': discussion_settings.id,
+        'divided_inline_discussions': divided_inline_discussions,
+        'divided_course_wide_discussions': divided_course_wide_discussions,
+        'always_divide_inline_discussions': discussion_settings.always_divide_inline_discussions,
+        'division_scheme': discussion_settings.division_scheme,
+        'available_division_schemes': available_division_schemes(course_key)
+    })
+
+
+def get_divided_discussions(course, discussion_settings):
+    """
+    Returns the course-wide and inline divided discussion ids separately.
+    """
+    divided_course_wide_discussions = []
+    divided_inline_discussions = []
+
+    course_wide_discussions = [topic['id'] for __, topic in course.discussion_topics.items()]
+    all_discussions = utils.get_discussion_categories_ids(course, None, include_all=True)
+
+    for divided_discussion_id in discussion_settings.divided_discussions:
+        if divided_discussion_id in course_wide_discussions:
+            divided_course_wide_discussions.append(divided_discussion_id)
+        elif divided_discussion_id in all_discussions:
+            divided_inline_discussions.append(divided_discussion_id)
+
+    return divided_course_wide_discussions, divided_inline_discussions

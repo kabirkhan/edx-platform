@@ -2,15 +2,16 @@
 Video player in the courseware.
 """
 
-import time
 import json
+import logging
+import time
+
 import requests
-from selenium.webdriver.common.action_chains import ActionChains
+from bok_choy.javascript import js_defined, wait_for_js
 from bok_choy.page_object import PageObject
 from bok_choy.promise import EmptyPromise, Promise
-from bok_choy.javascript import wait_for_js, js_defined
+from selenium.webdriver.common.action_chains import ActionChains
 
-import logging
 log = logging.getLogger('VideoPage')
 
 VIDEO_BUTTONS = {
@@ -91,6 +92,18 @@ class VideoPage(PageObject):
 
         video_selector = '{0}'.format(CSS_CLASS_NAMES['video_container'])
         self.wait_for_element_presence(video_selector, 'Video is initialized')
+
+    def scroll_to_button(self, button_name, index=0):
+        """
+        Scroll to a button specified by `button_name`
+
+        Arguments:
+            button_name (str): button name
+            index (int): query index
+
+        """
+        element = self.q(css=VIDEO_BUTTONS[button_name])[index]
+        self.browser.execute_script("arguments[0].scrollIntoView();", element)
 
     @wait_for_js
     def wait_for_video_player_render(self, autoplay=False):
@@ -467,6 +480,7 @@ class VideoPage(PageObject):
 
         """
         # mouse over to video speed button
+        self.scroll_to_button('speed')
         speed_menu_selector = self.get_element_selector(VIDEO_BUTTONS['speed'])
         element_to_hover_over = self.q(css=speed_menu_selector).results[0]
         hover = ActionChains(self.browser).move_to_element(element_to_hover_over)

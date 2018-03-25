@@ -7,17 +7,16 @@ Tests for compute_grades management command.
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import ddt
+import six
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
-from mock import patch
-import six
-
-from student.models import CourseEnrollment
-from xmodule.modulestore.tests.django_utils import SharedModuleStoreTestCase
-from xmodule.modulestore.tests.factories import CourseFactory
+from mock import ANY, patch
 
 from lms.djangoapps.grades.config.models import ComputeGradesSetting
 from lms.djangoapps.grades.management.commands import compute_grades
+from student.models import CourseEnrollment
+from xmodule.modulestore.tests.django_utils import SharedModuleStoreTestCase
+from xmodule.modulestore.tests.factories import CourseFactory
 
 
 def _sorted_by_batch(calls):
@@ -100,7 +99,8 @@ class TestComputeGrades(SharedModuleStoreTestCase):
             'course_key': course_key,
             'batch_size': 2,
             'offset': offset,
-            'estimate_first_attempted': estimate_first_attempted
+            'estimate_first_attempted': estimate_first_attempted,
+            'seq_id': ANY,
         }
         self.assertEqual(
             _sorted_by_batch(mock_task.apply_async.call_args_list),
@@ -136,7 +136,8 @@ class TestComputeGrades(SharedModuleStoreTestCase):
                         'course_key': self.course_keys[1],
                         'batch_size': 2,
                         'offset': 0,
-                        'estimate_first_attempted': True
+                        'estimate_first_attempted': True,
+                        'seq_id': ANY,
                     },
                 },),
                 ({
@@ -144,7 +145,8 @@ class TestComputeGrades(SharedModuleStoreTestCase):
                         'course_key': self.course_keys[1],
                         'batch_size': 2,
                         'offset': 2,
-                        'estimate_first_attempted': True
+                        'estimate_first_attempted': True,
+                        'seq_id': ANY,
                     },
                 },),
             ],

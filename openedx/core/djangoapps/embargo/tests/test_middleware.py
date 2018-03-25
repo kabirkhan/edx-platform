@@ -45,7 +45,7 @@ class EmbargoMiddlewareAccessTests(UrlResetMixin, ModuleStoreTestCase):
         self.client.login(username=self.USERNAME, password=self.PASSWORD)
 
         self.courseware_url = reverse(
-            'course_root',
+            'openedx.course_experience.course_home',
             kwargs={'course_id': unicode(self.course.id)}
         )
         self.non_courseware_url = reverse('dashboard')
@@ -115,7 +115,7 @@ class EmbargoMiddlewareAccessTests(UrlResetMixin, ModuleStoreTestCase):
             self.assertEqual(response.status_code, 200)
         else:
             redirect_url = reverse(
-                'embargo_blocked_message',
+                'embargo:blocked_message',
                 kwargs={
                     'access_point': 'courseware',
                     'message_key': 'embargo'
@@ -139,7 +139,7 @@ class EmbargoMiddlewareAccessTests(UrlResetMixin, ModuleStoreTestCase):
         )
 
         url = reverse(
-            'embargo_blocked_message',
+            'embargo:blocked_message',
             kwargs={
                 'access_point': access_point,
                 'message_key': msg_key

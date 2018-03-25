@@ -2,8 +2,8 @@
 This module contains various configuration settings via
 waffle switches for the Block Structure framework.
 """
-from openedx.core.djangolib.waffle_utils import WaffleSwitchPlus
-from request_cache.middleware import request_cached
+from openedx.core.djangoapps.waffle_utils import WaffleSwitchNamespace
+from openedx.core.djangoapps.request_cache.middleware import request_cached
 
 from .models import BlockStructureConfiguration
 
@@ -22,7 +22,7 @@ def waffle():
     """
     Returns the namespaced and cached Waffle class for BlockStructures.
     """
-    return WaffleSwitchPlus(namespace=WAFFLE_NAMESPACE, log_prefix=u'BlockStructure: ')
+    return WaffleSwitchNamespace(name=WAFFLE_NAMESPACE, log_prefix=u'BlockStructure: ')
 
 
 @request_cached

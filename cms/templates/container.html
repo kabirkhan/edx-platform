@@ -72,6 +72,8 @@ from openedx.core.djangolib.markup import HTML, Text
                  data-field="display_name" data-field-display-name="${_("Display Name")}">
                 <h1 class="page-header-title xblock-field-value incontext-editor-value"><span class="title-value">${xblock.display_name_with_default}</span></h1>
             </div>
+            <div class="container-access">
+            </div>
         </div>
 
         <nav class="nav-actions" aria-label="${_('Page Actions')}">
@@ -144,7 +146,7 @@ from openedx.core.djangolib.markup import HTML, Text
                         <div class="wrapper-unit-id bar-mod-content">
                             <h5 class="title">${_("Location ID")}</h5>
                             <p class="unit-id">
-                                <span class="unit-id-value" id="unit-location-id-input">${unit.location.name}</span>
+                                <span class="unit-id-value" id="unit-location-id-input">${unit.location.block_id}</span>
                                 <span class="tip"><span class="sr">Tip: </span>${_('To create a link to this unit from an HTML component in this course, enter "/jump_to_id/<location ID>" as the URL value.')}</span>
                             </p>
                         </div>

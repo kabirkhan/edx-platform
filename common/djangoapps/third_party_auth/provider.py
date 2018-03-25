@@ -2,11 +2,17 @@
 Third-party auth provider configuration API.
 """
 from django.contrib.sites.models import Site
+
 from openedx.core.djangoapps.theming.helpers import get_current_request
 
 from .models import (
-    OAuth2ProviderConfig, SAMLConfiguration, SAMLProviderConfig, LTIProviderConfig,
-    _PSA_OAUTH2_BACKENDS, _PSA_SAML_BACKENDS, _LTI_BACKENDS,
+    _LTI_BACKENDS,
+    _PSA_OAUTH2_BACKENDS,
+    _PSA_SAML_BACKENDS,
+    LTIProviderConfig,
+    OAuth2ProviderConfig,
+    SAMLConfiguration,
+    SAMLProviderConfig
 )
 
 
@@ -27,7 +33,7 @@ class Registry(object):
             provider = OAuth2ProviderConfig.current(oauth2_slug)
             if provider.enabled_for_current_site and provider.backend_name in _PSA_OAUTH2_BACKENDS:
                 yield provider
-        if SAMLConfiguration.is_enabled(Site.objects.get_current(get_current_request())):
+        if SAMLConfiguration.is_enabled(Site.objects.get_current(get_current_request()), 'default'):
             idp_slugs = SAMLProviderConfig.key_values('idp_slug', flat=True)
             for idp_slug in idp_slugs:
                 provider = SAMLProviderConfig.current(idp_slug)
@@ -65,6 +71,8 @@ class Registry(object):
     @classmethod
     def get(cls, provider_id):
         """Gets provider by provider_id string if enabled, else None."""
+        if not provider_id:
+            return None
         if '-' not in provider_id:  # Check format - see models.py:ProviderConfig
             raise ValueError("Invalid provider_id. Expect something like oa2-google")
         try:
@@ -110,7 +118,7 @@ class Registry(object):
                 if provider.backend_name == backend_name and provider.enabled_for_current_site:
                     yield provider
         elif backend_name in _PSA_SAML_BACKENDS and SAMLConfiguration.is_enabled(
-                Site.objects.get_current(get_current_request())):
+                Site.objects.get_current(get_current_request()), 'default'):
             idp_names = SAMLProviderConfig.key_values('idp_slug', flat=True)
             for idp_name in idp_names:
                 provider = SAMLProviderConfig.current(idp_name)

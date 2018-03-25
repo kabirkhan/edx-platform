@@ -8,18 +8,23 @@ from __future__ import unicode_literals
 import hashlib
 import json
 
-from Crypto.PublicKey import RSA
+from Cryptodome.PublicKey import RSA
 from django.conf import settings
 from django.core.urlresolvers import reverse
 from django.http import JsonResponse
 from django.views.generic import View
 from edx_oauth2_provider import views as dop_views  # django-oauth2-provider views
 from jwkest.jwk import RSAKey
-from oauth2_provider import models as dot_models, views as dot_views  # django-oauth-toolkit
+from oauth2_provider import models as dot_models  # django-oauth-toolkit
+from oauth2_provider import views as dot_views
+from ratelimit import ALL
+from ratelimit.mixins import RatelimitMixin
 
 from openedx.core.djangoapps.auth_exchange import views as auth_exchange_views
 from openedx.core.lib.token_utils import JwtBuilder
+
 from . import adapters
+from .dot_overrides import views as dot_overrides_views
 
 
 class _DispatchingView(View):
@@ -81,12 +86,16 @@ class _DispatchingView(View):
             return request.POST.get('client_id')
 
 
-class AccessTokenView(_DispatchingView):
+class AccessTokenView(RatelimitMixin, _DispatchingView):
     """
     Handle access token requests.
     """
     dot_view = dot_views.TokenView
     dop_view = dop_views.AccessTokenView
+    ratelimit_key = 'openedx.core.djangoapps.util.ratelimit.real_ip'
+    ratelimit_rate = settings.RATELIMIT_RATE
+    ratelimit_block = True
+    ratelimit_method = ALL
 
     def dispatch(self, request, *args, **kwargs):
         response = super(AccessTokenView, self).dispatch(request, *args, **kwargs)
@@ -121,7 +130,7 @@ class AuthorizationView(_DispatchingView):
     Part of the authorization flow.
     """
     dop_view = dop_views.Capture
-    dot_view = dot_views.AuthorizationView
+    dot_view = dot_overrides_views.EdxOAuth2AuthorizationView
 
 
 class AccessTokenExchangeView(_DispatchingView):

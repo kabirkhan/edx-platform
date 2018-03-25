@@ -4,17 +4,17 @@ Tests the "preview" selector in the LMS that allows changing between Staff, Lear
 """
 
 
+from textwrap import dedent
+
 from nose.plugins.attrib import attr
 
-from common.test.acceptance.tests.helpers import UniqueCourseTest, create_user_partition_json
-from common.test.acceptance.pages.studio.auto_auth import AutoAuthPage
+from common.test.acceptance.fixtures.course import CourseFixture, XBlockFixtureDesc
+from common.test.acceptance.pages.common.auto_auth import AutoAuthPage
 from common.test.acceptance.pages.lms.courseware import CoursewarePage
 from common.test.acceptance.pages.lms.instructor_dashboard import InstructorDashboardPage
 from common.test.acceptance.pages.lms.staff_view import StaffCoursewarePage
-from common.test.acceptance.fixtures.course import CourseFixture, XBlockFixtureDesc
-from bok_choy.promise import EmptyPromise
-from xmodule.partitions.partitions import (Group, ENROLLMENT_TRACK_PARTITION_ID, MINIMUM_STATIC_PARTITION_ID)
-from textwrap import dedent
+from common.test.acceptance.tests.helpers import UniqueCourseTest, create_user_partition_json
+from xmodule.partitions.partitions import ENROLLMENT_TRACK_PARTITION_ID, MINIMUM_STATIC_PARTITION_ID, Group
 
 
 @attr(shard=10)
@@ -413,23 +413,6 @@ class CourseWithContentGroupsTest(StaffViewTest):
         add_cohort_with_student("Cohort Alpha", "alpha", student_a_username)
         add_cohort_with_student("Cohort Beta", "beta", student_b_username)
         cohort_management_page.wait_for_ajax()
-
-    @attr(shard=3)
-    def test_as_specific_student(self):
-        student_a_username = 'tass_student_a'
-        student_b_username = 'tass_student_b'
-        AutoAuthPage(self.browser, username=student_a_username, course_id=self.course_id, no_login=True).visit()
-        AutoAuthPage(self.browser, username=student_b_username, course_id=self.course_id, no_login=True).visit()
-        self.create_cohorts_and_assign_students(student_a_username, student_b_username)
-
-        # Masquerade as learner in alpha cohort:
-        course_page = self._goto_staff_page()
-        course_page.set_staff_view_mode_specific_student(student_a_username)
-        verify_expected_problem_visibility(self, course_page, [self.alpha_text, self.audit_text, self.everyone_text])
-
-        # Masquerade as learner in beta cohort:
-        course_page.set_staff_view_mode_specific_student(student_b_username)
-        verify_expected_problem_visibility(self, course_page, [self.beta_text, self.audit_text, self.everyone_text])
 
     @attr('a11y')
     def test_course_page(self):

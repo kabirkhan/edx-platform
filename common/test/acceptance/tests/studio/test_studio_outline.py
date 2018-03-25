@@ -2,26 +2,27 @@
 """
 Acceptance tests for studio related to the outline page.
 """
+import itertools
 import json
 from datetime import datetime, timedelta
-import itertools
-from pytz import UTC
-from bok_choy.promise import EmptyPromise
-from nose.plugins.attrib import attr
+from unittest import skip
 
-from common.test.acceptance.pages.studio.settings_advanced import AdvancedSettingsPage
-from common.test.acceptance.pages.studio.overview import CourseOutlinePage, ContainerPage, ExpandCollapseLinkState
-from common.test.acceptance.pages.studio.utils import add_discussion, drag, verify_ordering
-from common.test.acceptance.pages.lms.course_home import CourseHomePage
-from common.test.acceptance.pages.lms.courseware import CoursewarePage
-from common.test.acceptance.pages.lms.staff_view import StaffCoursewarePage
-from common.test.acceptance.fixtures.config import ConfigModelFixture
-from common.test.acceptance.fixtures.course import XBlockFixtureDesc
+from nose.plugins.attrib import attr
+from pytz import UTC
 
 from base_studio_test import StudioCourseTest
-from common.test.acceptance.tests.helpers import load_data_str, disable_animations
+from common.test.acceptance.fixtures.config import ConfigModelFixture
+from common.test.acceptance.fixtures.course import XBlockFixtureDesc
+from common.test.acceptance.pages.common.utils import add_enrollment_course_modes
+from common.test.acceptance.pages.lms.course_home import CourseHomePage
+from common.test.acceptance.pages.lms.courseware import CoursewarePage
 from common.test.acceptance.pages.lms.progress import ProgressPage
-
+from common.test.acceptance.pages.lms.staff_view import StaffCoursewarePage
+from common.test.acceptance.pages.studio.overview import ContainerPage, CourseOutlinePage, ExpandCollapseLinkState
+from common.test.acceptance.pages.studio.settings_advanced import AdvancedSettingsPage
+from common.test.acceptance.pages.studio.settings_group_configurations import GroupConfigurationsPage
+from common.test.acceptance.pages.studio.utils import add_discussion, drag, verify_ordering
+from common.test.acceptance.tests.helpers import disable_animations, load_data_str
 
 SECTION_NAME = 'Test Section'
 SUBSECTION_NAME = 'Test Subsection'
@@ -115,6 +116,7 @@ class CourseOutlineDragAndDropTest(CourseOutlineTest):
             expected_ordering
         )
 
+    @skip("Fails in Firefox 45 but passes in Chrome")
     def test_drop_unit_in_collapsed_subsection(self):
         """
         Drag vertical "1.1.2" from subsection "1.1" into collapsed subsection "1.2" which already
@@ -495,6 +497,113 @@ class EditingSectionsTest(CourseOutlineTest):
 
 
 @attr(shard=3)
+class UnitAccessTest(CourseOutlineTest):
+    """
+    Feature: Units can be restricted and unrestricted to certain groups from the course outline.
+    """
+
+    __test__ = True
+
+    def setUp(self):
+        super(UnitAccessTest, self).setUp()
+        self.group_configurations_page = GroupConfigurationsPage(
+            self.browser,
+            self.course_info['org'],
+            self.course_info['number'],
+            self.course_info['run']
+        )
+        self.content_group_a = "Test Group A"
+        self.content_group_b = "Test Group B"
+
+        self.group_configurations_page.visit()
+        self.group_configurations_page.create_first_content_group()
+        config_a = self.group_configurations_page.content_groups[0]
+        config_a.name = self.content_group_a
+        config_a.save()
+        self.content_group_a_id = config_a.id
+
+        self.group_configurations_page.add_content_group()
+        config_b = self.group_configurations_page.content_groups[1]
+        config_b.name = self.content_group_b
+        config_b.save()
+        self.content_group_b_id = config_b.id
+
+    def populate_course_fixture(self, course_fixture):
+        """
+        Create a course with one section, one subsection, and two units
+        """
+        # with collapsed outline
+        self.chap_1_handle = 0
+        self.chap_1_seq_1_handle = 1
+
+        # with first sequential expanded
+        self.seq_1_vert_1_handle = 2
+        self.seq_1_vert_2_handle = 3
+        self.chap_1_seq_2_handle = 4
+
+        course_fixture.add_children(
+            XBlockFixtureDesc('chapter', "1").add_children(
+                XBlockFixtureDesc('sequential', '1.1').add_children(
+                    XBlockFixtureDesc('vertical', '1.1.1'),
+                    XBlockFixtureDesc('vertical', '1.1.2')
+                )
+            )
+        )
+
+    def _set_restriction_on_unrestricted_unit(self, unit):
+        """
+        Restrict unit access to a certain group and confirm that a
+        warning is displayed.  Then, remove the access restriction
+        and verify that the warning no longer appears.
+        """
+        self.assertFalse(unit.has_restricted_warning)
+        unit.toggle_unit_access('Content Groups', [self.content_group_a_id])
+        self.assertTrue(unit.has_restricted_warning)
+        unit.toggle_unit_access('Content Groups', [self.content_group_a_id])
+        self.assertFalse(unit.has_restricted_warning)
+
+    def test_units_can_be_restricted(self):
+        """
+        Visit the course outline page, restrict access to a unit.
+        Verify that there is a restricted group warning.
+        Remove the group access restriction and verify that there
+        is no longer a warning.
+        """
+        self.course_outline_page.visit()
+        self.course_outline_page.expand_all_subsections()
+        unit = self.course_outline_page.section_at(0).subsection_at(0).unit_at(0)
+        self._set_restriction_on_unrestricted_unit(unit)
+
+    def test_restricted_sections_for_content_group_users_in_lms(self):
+        """
+        Verify that those who are in an content track with access to a restricted unit are able
+        to see that unit in lms, and those who are in an enrollment track without access to a restricted
+        unit are not able to see that unit in lms
+        """
+        self.course_outline_page.visit()
+        self.course_outline_page.expand_all_subsections()
+        unit = self.course_outline_page.section_at(0).subsection_at(0).unit_at(0)
+        unit.toggle_unit_access('Content Groups', [self.content_group_a_id])
+        self.course_outline_page.view_live()
+
+        course_home_page = CourseHomePage(self.browser, self.course_id)
+        course_home_page.visit()
+        course_home_page.resume_course_from_header()
+        self.assertEqual(course_home_page.outline.num_units, 2)
+
+        # Test for a user without additional content available
+        staff_page = StaffCoursewarePage(self.browser, self.course_id)
+        staff_page.set_staff_view_mode('Learner in Test Group B')
+        staff_page.wait_for_page()
+        self.assertEqual(course_home_page.outline.num_units, 1)
+
+        # Test for a user with additional content available
+        staff_page.set_staff_view_mode('Learner in Test Group A')
+        staff_page.wait_for_page()
+        self.assertEqual(course_home_page.outline.num_units, 2)
+
+
+@attr(shard=3)
 class StaffLockTest(CourseOutlineTest):
     """
     Feature: Sections, subsections, and units can be locked and unlocked from the course outline.
@@ -723,49 +832,6 @@ class StaffLockTest(CourseOutlineTest):
         subsection = self.course_outline_page.section_at(0).subsection_at(0)
         subsection.unit_at(0).set_staff_lock(True)
         self.assertFalse(subsection.has_staff_lock_warning)
-
-    def test_locked_sections_do_not_appear_in_lms(self):
-        """
-        Scenario: A locked section is not visible to students in the LMS
-            Given I have a course with two sections
-            When I enable explicit staff lock on one section
-            And I click the View Live button to switch to staff view
-            And I visit the course home with the outline
-            Then I see two sections in the outline
-            And when I switch the view mode to student view
-            Then I see one section in the outline
-        """
-        self.course_outline_page.visit()
-        self.course_outline_page.add_section_from_top_button()
-        self.course_outline_page.section_at(1).set_staff_lock(True)
-        self.course_outline_page.view_live()
-
-        course_home_page = CourseHomePage(self.browser, self.course_id)
-        course_home_page.visit()
-        self.assertEqual(course_home_page.outline.num_sections, 2)
-        course_home_page.preview.set_staff_view_mode('Learner')
-        self.assertEqual(course_home_page.outline.num_sections, 1)
-
-    def test_locked_subsections_do_not_appear_in_lms(self):
-        """
-        Scenario: A locked subsection is not visible to students in the LMS
-            Given I have a course with two subsections
-            When I enable explicit staff lock on one subsection
-            And I click the View Live button to switch to staff view
-            And I visit the course home with the outline
-            Then I see two subsections in the outline
-            And when I switch the view mode to student view
-            Then I see one subsection in the outline
-        """
-        self.course_outline_page.visit()
-        self.course_outline_page.section_at(0).subsection_at(1).set_staff_lock(True)
-        self.course_outline_page.view_live()
-
-        course_home_page = CourseHomePage(self.browser, self.course_id)
-        course_home_page.visit()
-        self.assertEqual(course_home_page.outline.num_subsections, 2)
-        course_home_page.preview.set_staff_view_mode('Learner')
-        self.assertEqual(course_home_page.outline.num_subsections, 1)
 
     def test_toggling_staff_lock_on_section_does_not_publish_draft_units(self):
         """
@@ -1442,8 +1508,6 @@ class DefaultStatesContentTest(CourseOutlineTest):
 
     __test__ = True
 
-    # TODO: TNL-6546: Removing unified_course_view_flag
-    # This test will need to be rewritten to point to the new course home page.
     def test_view_live(self):
         """
         Scenario: View Live version from course outline

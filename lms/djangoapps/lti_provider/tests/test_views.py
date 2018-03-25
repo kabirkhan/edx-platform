@@ -2,18 +2,18 @@
 Tests for the LTI provider views
 """
 
+import pytest
 from django.core.urlresolvers import reverse
 from django.test import TestCase
 from django.test.client import RequestFactory
-from mock import patch, MagicMock
+from mock import MagicMock, patch
 from nose.plugins.attrib import attr
+from opaque_keys.edx.locator import BlockUsageLocator, CourseLocator
 
 from courseware.testutils import RenderXBlockTestMixin
-from lti_provider import views, models
-from opaque_keys.edx.locator import CourseLocator, BlockUsageLocator
+from lti_provider import models, views
 from student.tests.factories import UserFactory
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
-
 
 LTI_DEFAULT_PARAMS = {
     'roles': u'Instructor,urn:lti:instrole:ims/lis/Administrator',
@@ -45,15 +45,18 @@ COURSE_PARAMS = {
 ALL_PARAMS = dict(LTI_DEFAULT_PARAMS.items() + COURSE_PARAMS.items())
 
 
-def build_launch_request(authenticated=True):
+def build_launch_request(extra_post_data=None, param_to_delete=None):
     """
     Helper method to create a new request object for the LTI launch.
     """
-    request = RequestFactory().post('/')
+    if extra_post_data is None:
+        extra_post_data = {}
+    post_data = dict(LTI_DEFAULT_PARAMS.items() + extra_post_data.items())
+    if param_to_delete:
+        del post_data[param_to_delete]
+    request = RequestFactory().post('/', data=post_data)
     request.user = UserFactory.create()
-    request.user.is_authenticated = MagicMock(return_value=authenticated)
     request.session = {}
-    request.POST.update(LTI_DEFAULT_PARAMS)
     return request
 
 
@@ -111,8 +114,7 @@ class LtiLaunchTest(LtiTestMixin, TestCase):
         """
         Helper method to remove a parameter from the LTI launch and call the view
         """
-        request = build_launch_request()
-        del request.POST[missing_param]
+        request = build_launch_request(param_to_delete=missing_param)
         return views.lti_launch(request, None, None)
 
     def test_launch_with_missing_parameters(self):
@@ -153,8 +155,7 @@ class LtiLaunchTest(LtiTestMixin, TestCase):
     def test_lti_consumer_record_supplemented_with_guid(self, _render):
         self.mock_verify.return_value = False
 
-        request = build_launch_request()
-        request.POST.update(LTI_OPTIONAL_PARAMS)
+        request = build_launch_request(LTI_OPTIONAL_PARAMS)
         with self.assertNumQueries(3):
             views.lti_launch(request, None, None)
         consumer = models.LtiConsumer.objects.get(
@@ -164,6 +165,7 @@ class LtiLaunchTest(LtiTestMixin, TestCase):
 
 
 @attr(shard=3)
+@pytest.mark.django111_expected_failure
 class LtiLaunchTestRender(LtiTestMixin, RenderXBlockTestMixin, ModuleStoreTestCase):
     """
     Tests for the rendering returned by lti_launch view.

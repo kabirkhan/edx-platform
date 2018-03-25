@@ -1,4 +1,6 @@
-"""Base integration test for provider implementations."""
+"""
+Base integration test for provider implementations.
+"""
 
 import unittest
 
@@ -6,6 +8,7 @@ import json
 import mock
 
 from contextlib import contextmanager
+import django
 from django import test
 from django.contrib import auth
 from django.contrib.auth import models as auth_models
@@ -14,19 +17,19 @@ from django.contrib.sessions.backends import cache
 from django.core.urlresolvers import reverse
 from django.test import utils as django_utils
 from django.conf import settings as django_settings
-from social import actions, exceptions
-from social.apps.django_app import utils as social_utils
-from social.apps.django_app import views as social_views
+from social_core import actions, exceptions
+from social_django import utils as social_utils
+from social_django import views as social_views
 
 from lms.djangoapps.commerce.tests import TEST_API_URL
 from openedx.core.djangoapps.site_configuration.tests.factories import SiteFactory
+from openedx.tests.util import expected_redirect_url
 from student import models as student_models
 from student import views as student_views
 from student.tests.factories import UserFactory
 from student_account.views import account_settings_context
 
 from third_party_auth import middleware, pipeline
-from third_party_auth import settings as auth_settings
 from third_party_auth.tests import testutil
 
 
@@ -55,7 +58,7 @@ class IntegrationTestMixin(object):
         self.addCleanup(patcher.stop)
         # Override this method in a subclass and enable at least one provider.
 
-    def test_register(self):
+    def test_register(self, **extra_defaults):
         # The user goes to the register page, and sees a button to register with the provider:
         provider_register_url = self._check_register_page()
         # The user clicks on the Dummy button:
@@ -65,7 +68,7 @@ class IntegrationTestMixin(object):
         provider_response = self.do_provider_login(try_login_response['Location'])
         # We should be redirected to the register screen since this account is not linked to an edX account:
         self.assertEqual(provider_response.status_code, 302)
-        self.assertEqual(provider_response['Location'], self.url_prefix + self.register_page_url)
+        self.assertEqual(provider_response['Location'], expected_redirect_url(self.register_page_url, hostname=self.hostname))
         register_response = self.client.get(self.register_page_url)
         tpa_context = register_response.context["data"]["third_party_auth"]
         self.assertEqual(tpa_context["errorMessage"], None)
@@ -77,6 +80,8 @@ class IntegrationTestMixin(object):
         self.assertEqual(form_fields['email']['defaultValue'], self.USER_EMAIL)
         self.assertEqual(form_fields['name']['defaultValue'], self.USER_NAME)
         self.assertEqual(form_fields['username']['defaultValue'], self.USER_USERNAME)
+        for field_name, value in extra_defaults.items():
+            self.assertEqual(form_fields[field_name]['defaultValue'], value)
         registration_values = {
             'email': 'email-edited@tpa-test.none',
             'name': 'My Customized Name',
@@ -93,7 +98,7 @@ class IntegrationTestMixin(object):
         continue_response = self.client.get(tpa_context["finishAuthUrl"])
         # And we should be redirected to the dashboard:
         self.assertEqual(continue_response.status_code, 302)
-        self.assertEqual(continue_response['Location'], self.url_prefix + reverse('dashboard'))
+        self.assertEqual(continue_response['Location'], expected_redirect_url(reverse('dashboard'), hostname=self.hostname))
 
         # Now check that we can login again, whether or not we have yet verified the account:
         self.client.logout()
@@ -114,7 +119,7 @@ class IntegrationTestMixin(object):
         complete_response = self.do_provider_login(try_login_response['Location'])
         # We should be redirected to the login screen since this account is not linked to an edX account:
         self.assertEqual(complete_response.status_code, 302)
-        self.assertEqual(complete_response['Location'], self.url_prefix + self.login_page_url)
+        self.assertEqual(complete_response['Location'], expected_redirect_url(self.login_page_url, hostname=self.hostname))
         login_response = self.client.get(self.login_page_url)
         tpa_context = login_response.context["data"]["third_party_auth"]
         self.assertEqual(tpa_context["errorMessage"], None)
@@ -131,7 +136,7 @@ class IntegrationTestMixin(object):
         continue_response = self.client.get(tpa_context["finishAuthUrl"])
         # And we should be redirected to the dashboard:
         self.assertEqual(continue_response.status_code, 302)
-        self.assertEqual(continue_response['Location'], self.url_prefix + reverse('dashboard'))
+        self.assertEqual(continue_response['Location'], expected_redirect_url(reverse('dashboard'), hostname=self.hostname))
 
         # Now check that we can login again:
         self.client.logout()
@@ -160,7 +165,12 @@ class IntegrationTestMixin(object):
         # required to set the login cookie (it sticks around if the main session times out):
         if not previous_session_timed_out:
             self.assertEqual(login_response.status_code, 302)
-            self.assertEqual(login_response['Location'], self.url_prefix + self.complete_url)
+            expected_url = expected_redirect_url(self.complete_url, hostname=self.hostname)
+            # TODO: Remove Django 1.11 upgrade shim
+            # SHIM: Get rid of this logic post-upgrade
+            if django.VERSION >= (1, 9):
+                expected_url = "{}?".format(expected_url)
+            self.assertEqual(login_response['Location'], expected_url)
             # And then we should be redirected to the dashboard:
             login_response = self.client.get(login_response['Location'])
             self.assertEqual(login_response.status_code, 302)
@@ -168,7 +178,7 @@ class IntegrationTestMixin(object):
             url_expected = reverse('dashboard')
         else:
             url_expected = reverse('third_party_inactive_redirect') + '?next=' + reverse('dashboard')
-        self.assertEqual(login_response['Location'], self.url_prefix + url_expected)
+        self.assertEqual(login_response['Location'], expected_redirect_url(url_expected, hostname=self.hostname))
         # Now we are logged in:
         dashboard_response = self.client.get(reverse('dashboard'))
         self.assertEqual(dashboard_response.status_code, 200)
@@ -251,7 +261,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         self.assertEqual(302, response.status_code)
         self.assertTrue(response.has_header('Location'))
 
-    def assert_register_response_in_pipeline_looks_correct(self, response, pipeline_kwargs):
+    def assert_register_response_in_pipeline_looks_correct(self, response, pipeline_kwargs, required_fields):
         """Performs spot checks of the rendered register.html page.
 
         When we display the new account registration form after the user signs
@@ -267,9 +277,10 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         self.assertIn('successfully signed in with <strong>%s</strong>' % self.provider.name, response.content)
         # Expect that each truthy value we've prepopulated the register form
         # with is actually present.
-        for prepopulated_form_value in self.provider.get_register_form_data(pipeline_kwargs).values():
-            if prepopulated_form_value:
-                self.assertIn(prepopulated_form_value, response.content)
+        form_field_data = self.provider.get_register_form_data(pipeline_kwargs)
+        for prepopulated_form_data in form_field_data:
+            if prepopulated_form_data in required_fields:
+                self.assertIn(form_field_data[prepopulated_form_data], response.content.decode('utf-8'))
 
     # Implementation details and actual tests past this point -- no more
     # configuration needed.
@@ -284,7 +295,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         return self.provider.backend_name
 
     # pylint: disable=invalid-name
-    def assert_account_settings_context_looks_correct(self, context, _user, duplicate=False, linked=None):
+    def assert_account_settings_context_looks_correct(self, context, duplicate=False, linked=None):
         """Asserts the user's account settings page context is in the expected state.
 
         If duplicate is True, we expect context['duplicate_provider'] to contain
@@ -455,7 +466,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         """Creates user, profile, registration, and (usually) social auth.
 
         This synthesizes what happens during /register.
-        See student.views.register and student.views._do_create_account.
+        See student.views.register and student.helpers.do_create_account.
         """
         response_data = self.get_response_data()
         uid = strategy.request.backend.get_user_id(response_data, response_data)
@@ -472,7 +483,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         return user
 
     def fake_auth_complete(self, strategy):
-        """Fake implementation of social.backends.BaseAuth.auth_complete.
+        """Fake implementation of social_core.backends.BaseAuth.auth_complete.
 
         Unlike what the docs say, it does not need to return a user instance.
         Sometimes (like when directing users to the /register form) it instead
@@ -514,7 +525,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         These two objects contain circular references, so we create them
         together. The references themselves are a mixture of normal __init__
         stuff and monkey-patching done by python-social-auth. See, for example,
-        social.apps.django_apps.utils.strategy().
+        social_django.utils.strategy().
         """
         request = self.request_factory.get(
             pipeline.get_complete_url(self.backend_name) +
@@ -599,7 +610,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
 
         # First we expect that we're in the unlinked state, and that there
         # really is no association in the backend.
-        self.assert_account_settings_context_looks_correct(account_settings_context(request), request.user, linked=False)
+        self.assert_account_settings_context_looks_correct(account_settings_context(request), linked=False)
         self.assert_social_auth_does_not_exist_for_user(request.user, strategy)
 
         # We should be redirected back to the complete page, setting
@@ -613,13 +624,19 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         self.set_logged_in_cookies(request)
 
         # Fire off the auth pipeline to link.
-        self.assert_redirect_to_dashboard_looks_correct(actions.do_complete(
-            request.backend, social_views._do_login, request.user, None,  # pylint: disable=protected-access
-            redirect_field_name=auth.REDIRECT_FIELD_NAME))
+        self.assert_redirect_to_dashboard_looks_correct(  # pylint: disable=protected-access
+            actions.do_complete(
+                request.backend,
+                social_views._do_login,
+                request.user,
+                None,
+                redirect_field_name=auth.REDIRECT_FIELD_NAME
+            )
+        )
 
         # Now we expect to be in the linked state, with a backend entry.
         self.assert_social_auth_exists_for_user(request.user, strategy)
-        self.assert_account_settings_context_looks_correct(account_settings_context(request), request.user, linked=True)
+        self.assert_account_settings_context_looks_correct(account_settings_context(request), linked=True)
 
     def test_full_pipeline_succeeds_for_unlinking_account(self):
         # First, create, the request and strategy that store pipeline state,
@@ -646,15 +663,21 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
             actions.do_complete(request.backend, social_views._do_login, user=user)  # pylint: disable=protected-access
 
         # First we expect that we're in the linked state, with a backend entry.
-        self.assert_account_settings_context_looks_correct(account_settings_context(request), user, linked=True)
+        self.assert_account_settings_context_looks_correct(account_settings_context(request), linked=True)
         self.assert_social_auth_exists_for_user(request.user, strategy)
 
         # Fire off the disconnect pipeline to unlink.
-        self.assert_redirect_to_dashboard_looks_correct(actions.do_disconnect(
-            request.backend, request.user, None, redirect_field_name=auth.REDIRECT_FIELD_NAME))
+        self.assert_redirect_to_dashboard_looks_correct(
+            actions.do_disconnect(
+                request.backend,
+                request.user,
+                None,
+                redirect_field_name=auth.REDIRECT_FIELD_NAME
+            )
+        )
 
         # Now we expect to be in the unlinked state, with no backend entry.
-        self.assert_account_settings_context_looks_correct(account_settings_context(request), user, linked=False)
+        self.assert_account_settings_context_looks_correct(account_settings_context(request), linked=False)
         self.assert_social_auth_does_not_exist_for_user(user, strategy)
 
     def test_linking_already_associated_account_raises_auth_already_associated(self):
@@ -711,7 +734,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
             exceptions.AuthAlreadyAssociated(self.provider.backend_name, 'account is already in use.'))
 
         self.assert_account_settings_context_looks_correct(
-            account_settings_context(request), user, duplicate=True, linked=True)
+            account_settings_context(request), duplicate=True, linked=True)
 
     def test_full_pipeline_succeeds_for_signing_in_to_existing_active_account(self):
         # First, create, the request and strategy that store pipeline state,
@@ -762,7 +785,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
 
         self.assert_redirect_to_dashboard_looks_correct(
             actions.do_complete(request.backend, social_views._do_login, user=user))
-        self.assert_account_settings_context_looks_correct(account_settings_context(request), user)
+        self.assert_account_settings_context_looks_correct(account_settings_context(request))
 
     def test_signin_fails_if_account_not_active(self):
         _, strategy = self.get_request_and_strategy(
@@ -823,7 +846,10 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         # fire off the view that displays the registration form.
         with self._patch_edxmako_current_request(request):
             self.assert_register_response_in_pipeline_looks_correct(
-                student_views.register_user(strategy.request), pipeline.get(request)['kwargs'])
+                student_views.register_user(strategy.request),
+                pipeline.get(request)['kwargs'],
+                ['name', 'username', 'email']
+            )
 
         # Next, we invoke the view that handles the POST. Not all providers
         # supply email. Manually add it as the user would have to; this
@@ -865,7 +891,7 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
             actions.do_complete(strategy.request.backend, social_views._do_login, user=created_user))
         # Now the user has been redirected to the dashboard. Their third party account should now be linked.
         self.assert_social_auth_exists_for_user(created_user, strategy)
-        self.assert_account_settings_context_looks_correct(account_settings_context(request), created_user, linked=True)
+        self.assert_account_settings_context_looks_correct(account_settings_context(request), linked=True)
 
     def test_new_account_registration_assigns_distinct_username_on_collision(self):
         original_username = self.get_username()
@@ -877,8 +903,9 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         strategy.storage.user.create_user(username=self.get_username(), email='user@email.com', password='password')
         backend = strategy.request.backend
         backend.auth_complete = mock.MagicMock(return_value=self.fake_auth_complete(strategy))
+        # If learner already has an account then make sure login page is served instead of registration.
         # pylint: disable=protected-access
-        self.assert_redirect_to_register_looks_correct(actions.do_complete(backend, social_views._do_login))
+        self.assert_redirect_to_login_looks_correct(actions.do_complete(backend, social_views._do_login))
         distinct_username = pipeline.get(request)['kwargs']['username']
         self.assertNotEqual(original_username, distinct_username)
 
@@ -892,7 +919,10 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
 
         with self._patch_edxmako_current_request(request):
             self.assert_register_response_in_pipeline_looks_correct(
-                student_views.register_user(strategy.request), pipeline.get(request)['kwargs'])
+                student_views.register_user(strategy.request),
+                pipeline.get(request)['kwargs'],
+                ['name', 'username', 'email']
+            )
 
         with self._patch_edxmako_current_request(strategy.request):
             strategy.request.POST = self.get_registration_post_vars()
@@ -909,11 +939,10 @@ class IntegrationTest(testutil.TestCase, test.TestCase):
         with self.assertRaises(pipeline.AuthEntryError):
             strategy.request.backend.auth_complete = mock.MagicMock(return_value=self.fake_auth_complete(strategy))
 
-    def test_pipeline_raises_auth_entry_error_if_auth_entry_missing(self):
+    def test_pipeline_assumes_login_if_auth_entry_missing(self):
         _, strategy = self.get_request_and_strategy(auth_entry=None, redirect_uri='social:complete')
-
-        with self.assertRaises(pipeline.AuthEntryError):
-            strategy.request.backend.auth_complete = mock.MagicMock(return_value=self.fake_auth_complete(strategy))
+        response = self.fake_auth_complete(strategy)
+        self.assertEqual(response.url, reverse('signin_user'))
 
 
 # pylint: disable=test-inherits-tests, abstract-method

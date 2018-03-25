@@ -2,72 +2,84 @@
 """
 Tests courseware views.py
 """
-
-from urllib import urlencode, quote
-import ddt
-import json
 import itertools
+import json
 import unittest
-from uuid import uuid4
 from datetime import datetime, timedelta
 from HTMLParser import HTMLParser
-from nose.plugins.attrib import attr
-from freezegun import freeze_time
+from urllib import quote, urlencode
+from uuid import uuid4
 
+import ddt
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
-from django.core.urlresolvers import reverse
+from django.core.urlresolvers import reverse, reverse_lazy
 from django.http import Http404, HttpResponseBadRequest
 from django.test import TestCase
-from django.test.client import RequestFactory
-from django.test.client import Client
+from django.test.client import Client, RequestFactory
 from django.test.utils import override_settings
-from mock import MagicMock, patch, create_autospec, PropertyMock
-from opaque_keys.edx.locations import Location, SlashSeparatedCourseKey
+from freezegun import freeze_time
+from milestones.tests.utils import MilestonesTestCaseMixin
+from mock import MagicMock, PropertyMock, create_autospec, patch
+from nose.plugins.attrib import attr
+from opaque_keys.edx.keys import CourseKey
+from opaque_keys.edx.locator import BlockUsageLocator, CourseLocator
 from pytz import UTC
+from six import text_type
+from web_fragments.fragment import Fragment
 from xblock.core import XBlock
-from xblock.fields import String, Scope
-from xblock.fragment import Fragment
+from xblock.fields import Scope, String
 
 import courseware.views.views as views
 import shoppingcart
-from certificates import api as certs_api
-from certificates.models import CertificateStatuses, CertificateGenerationConfiguration
-from certificates.tests.factories import (
-    CertificateInvalidationFactory,
-    GeneratedCertificateFactory
-)
-from commerce.models import CommerceConfiguration
+from capa.tests.response_xml_factory import MultipleChoiceResponseXMLFactory
 from course_modes.models import CourseMode
 from course_modes.tests.factories import CourseModeFactory
-from courseware.access_utils import is_course_open_for_learner
-from courseware.model_data import set_score
+from courseware.access_utils import check_course_open_for_learner
+from courseware.model_data import FieldDataCache, set_score
+from courseware.module_render import get_module
+from courseware.tests.factories import GlobalStaffFactory, StudentModuleFactory
 from courseware.testutils import RenderXBlockTestMixin
-from courseware.tests.factories import StudentModuleFactory, GlobalStaffFactory
 from courseware.url_helpers import get_redirect_url
 from courseware.user_state_client import DjangoXBlockUserStateClient
+from lms.djangoapps.certificates import api as certs_api
+from lms.djangoapps.certificates.models import (
+    CertificateGenerationConfiguration, CertificateStatuses, CertificateWhitelist,
+)
+from lms.djangoapps.certificates.tests.factories import CertificateInvalidationFactory, GeneratedCertificateFactory
+from lms.djangoapps.commerce.models import CommerceConfiguration
 from lms.djangoapps.commerce.utils import EcommerceService  # pylint: disable=import-error
-from lms.djangoapps.grades.config.waffle import waffle as grades_waffle, ASSUME_ZERO_GRADE_IF_ABSENT
-from milestones.tests.utils import MilestonesTestCaseMixin
+from lms.djangoapps.grades.config.waffle import waffle as grades_waffle
+from lms.djangoapps.grades.config.waffle import ASSUME_ZERO_GRADE_IF_ABSENT
 from openedx.core.djangoapps.catalog.tests.factories import CourseFactory as CatalogCourseFactory
-from openedx.core.djangoapps.catalog.tests.factories import ProgramFactory, CourseRunFactory
+from openedx.core.djangoapps.catalog.tests.factories import CourseRunFactory, ProgramFactory
 from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
 from openedx.core.djangoapps.crawlers.models import CrawlersConfig
 from openedx.core.djangoapps.credit.api import set_credit_requirements
 from openedx.core.djangoapps.credit.models import CreditCourse, CreditProvider
-from openedx.core.djangoapps.self_paced.models import SelfPacedConfiguration
+from openedx.core.djangoapps.waffle_utils import CourseWaffleFlag, WaffleFlagNamespace
+from openedx.core.djangoapps.waffle_utils.testutils import WAFFLE_TABLES, override_waffle_flag
+from openedx.core.djangolib.testing.utils import get_mock_request
 from openedx.core.lib.gating import api as gating_api
+from openedx.features.course_experience import COURSE_OUTLINE_PAGE_FLAG, UNIFIED_COURSE_TAB_FLAG
 from openedx.features.enterprise_support.tests.mixins.enterprise import EnterpriseTestConsentRequired
+from openedx.tests.util import expected_redirect_url
 from student.models import CourseEnrollment
-from student.tests.factories import AdminFactory, UserFactory, CourseEnrollmentFactory
-from util.tests.test_date_utils import fake_ugettext, fake_pgettext
+from student.tests.factories import TEST_PASSWORD, AdminFactory, CourseEnrollmentFactory, UserFactory
+from util.tests.test_date_utils import fake_pgettext, fake_ugettext
 from util.url import reload_django_url_config
 from util.views import ensure_valid_course_key
+from xmodule.graders import ShowCorrectness
 from xmodule.modulestore import ModuleStoreEnum
 from xmodule.modulestore.django import modulestore
-from xmodule.modulestore.tests.django_utils import TEST_DATA_MIXED_MODULESTORE
-from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase, SharedModuleStoreTestCase
+from xmodule.modulestore.tests.django_utils import (
+    TEST_DATA_MIXED_MODULESTORE,
+    ModuleStoreTestCase,
+    SharedModuleStoreTestCase
+)
 from xmodule.modulestore.tests.factories import CourseFactory, ItemFactory, check_mongo_calls
+
+QUERY_COUNT_TABLE_BLACKLIST = WAFFLE_TABLES
 
 
 @attr(shard=1)
@@ -80,7 +92,7 @@ class TestJumpTo(ModuleStoreTestCase):
     def setUp(self):
         super(TestJumpTo, self).setUp()
         # Use toy course from XML
-        self.course_key = SlashSeparatedCourseKey('edX', 'toy', '2012_Fall')
+        self.course_key = CourseKey.from_string('edX/toy/2012_Fall')
 
     def test_jumpto_invalid_location(self):
         location = self.course_key.make_usage_key(None, 'NoSuchPlace')
@@ -89,21 +101,6 @@ class TestJumpTo(ModuleStoreTestCase):
         jumpto_url = '{0}/{1}/jump_to/{2}'.format('/courses', unicode(self.course_key), unicode(location))
         response = self.client.get(jumpto_url)
         self.assertEqual(response.status_code, 404)
-
-    @unittest.skip
-    def test_jumpto_from_chapter(self):
-        location = self.course_key.make_usage_key('chapter', 'Overview')
-        jumpto_url = '{0}/{1}/jump_to/{2}'.format('/courses', unicode(self.course_key), unicode(location))
-        expected = 'courses/edX/toy/2012_Fall/courseware/Overview/'
-        response = self.client.get(jumpto_url)
-        self.assertRedirects(response, expected, status_code=302, target_status_code=302)
-
-    @unittest.skip
-    def test_jumpto_id(self):
-        jumpto_url = '{0}/{1}/jump_to_id/{2}'.format('/courses', unicode(self.course_key), 'Overview')
-        expected = 'courses/edX/toy/2012_Fall/courseware/Overview/'
-        response = self.client.get(jumpto_url)
-        self.assertRedirects(response, expected, status_code=302, target_status_code=302)
 
     def test_jumpto_from_section(self):
         course = CourseFactory.create()
@@ -121,7 +118,7 @@ class TestJumpTo(ModuleStoreTestCase):
             unicode(section.location),
         )
         response = self.client.get(jumpto_url)
-        self.assertRedirects(response, expected, status_code=302, target_status_code=302)
+        self.assertRedirects(response, expected_redirect_url(expected), status_code=302, target_status_code=302)
 
     def test_jumpto_from_module(self):
         course = CourseFactory.create()
@@ -144,7 +141,7 @@ class TestJumpTo(ModuleStoreTestCase):
             unicode(module1.location),
         )
         response = self.client.get(jumpto_url)
-        self.assertRedirects(response, expected, status_code=302, target_status_code=302)
+        self.assertRedirects(response, expected_redirect_url(expected), status_code=302, target_status_code=302)
 
         expected = 'courses/{course_id}/courseware/{chapter_id}/{section_id}/2?{activate_block_id}'.format(
             course_id=unicode(course.id),
@@ -158,7 +155,7 @@ class TestJumpTo(ModuleStoreTestCase):
             unicode(module2.location),
         )
         response = self.client.get(jumpto_url)
-        self.assertRedirects(response, expected, status_code=302, target_status_code=302)
+        self.assertRedirects(response, expected_redirect_url(expected), status_code=302, target_status_code=302)
 
     def test_jumpto_from_nested_module(self):
         course = CourseFactory.create()
@@ -186,10 +183,11 @@ class TestJumpTo(ModuleStoreTestCase):
             unicode(module2.location),
         )
         response = self.client.get(jumpto_url)
-        self.assertRedirects(response, expected, status_code=302, target_status_code=302)
+        self.assertRedirects(response, expected_redirect_url(expected), status_code=302, target_status_code=302)
 
     def test_jumpto_id_invalid_location(self):
-        location = Location('edX', 'toy', 'NoSuchPlace', None, None, None)
+        location = BlockUsageLocator(CourseLocator('edX', 'toy', 'NoSuchPlace', deprecated=True),
+                                     None, None, deprecated=True)
         jumpto_url = '{0}/{1}/jump_to_id/{2}'.format('/courses', unicode(self.course_key), unicode(location))
         response = self.client.get(jumpto_url)
         self.assertEqual(response.status_code, 404)
@@ -205,8 +203,8 @@ class IndexQueryTestCase(ModuleStoreTestCase):
     NUM_PROBLEMS = 20
 
     @ddt.data(
-        (ModuleStoreEnum.Type.mongo, 10, 142),
-        (ModuleStoreEnum.Type.split, 4, 142),
+        (ModuleStoreEnum.Type.mongo, 10, 143),
+        (ModuleStoreEnum.Type.split, 4, 143),
     )
     @ddt.unpack
     def test_index_query_counts(self, store_type, expected_mongo_query_count, expected_mysql_query_count):
@@ -219,19 +217,18 @@ class IndexQueryTestCase(ModuleStoreTestCase):
                 for _ in range(self.NUM_PROBLEMS):
                     ItemFactory.create(category='problem', parent_location=vertical.location)
 
-        password = 'test'
-        self.user = UserFactory(password=password)
-        self.client.login(username=self.user.username, password=password)
+        self.user = UserFactory()
+        self.client.login(username=self.user.username, password=TEST_PASSWORD)
         CourseEnrollment.enroll(self.user, course.id)
 
-        with self.assertNumQueries(expected_mysql_query_count):
+        with self.assertNumQueries(expected_mysql_query_count, table_blacklist=QUERY_COUNT_TABLE_BLACKLIST):
             with check_mongo_calls(expected_mongo_query_count):
                 url = reverse(
                     'courseware_section',
                     kwargs={
                         'course_id': unicode(course.id),
-                        'chapter': unicode(chapter.location.name),
-                        'section': unicode(section.location.name),
+                        'chapter': unicode(chapter.location.block_id),
+                        'section': unicode(section.location.block_id),
                     }
                 )
                 response = self.client.get(url)
@@ -244,6 +241,11 @@ class ViewsTestCase(ModuleStoreTestCase):
     """
     Tests for views.py methods.
     """
+    YESTERDAY = 'yesterday'
+    DATES = {
+        YESTERDAY: datetime.now(UTC) - timedelta(days=1),
+        None: None,
+    }
 
     def setUp(self):
         super(ViewsTestCase, self).setUp()
@@ -289,8 +291,8 @@ class ViewsTestCase(ModuleStoreTestCase):
             )
 
         self.course_key = self.course.id
-        self.password = '123456'
-        self.user = UserFactory(username='dummy', password=self.password, email='test@mit.edu')
+        # Set profile country to Åland Islands to check Unicode characters does not raise error
+        self.user = UserFactory(username='dummy', profile__country='AX')
         self.date = datetime(2013, 1, 22, tzinfo=UTC)
         self.enrollment = CourseEnrollment.enroll(self.user, self.course_key)
         self.enrollment.created = self.date
@@ -301,7 +303,7 @@ class ViewsTestCase(ModuleStoreTestCase):
         self.org = u"ꜱᴛᴀʀᴋ ɪɴᴅᴜꜱᴛʀɪᴇꜱ"
         self.org_html = "<p>'+Stark/Industries+'</p>"
 
-        self.assertTrue(self.client.login(username=self.user.username, password=self.password))
+        self.assertTrue(self.client.login(username=self.user.username, password=TEST_PASSWORD))
 
         # refresh the course from the modulestore so that it has children
         self.course = modulestore().get_course(self.course.id)
@@ -345,8 +347,8 @@ class ViewsTestCase(ModuleStoreTestCase):
             'courseware_section',
             kwargs={
                 'course_id': unicode(self.course_key),
-                'chapter': unicode(self.chapter.location.name) if chapter_name is None else chapter_name,
-                'section': unicode(self.section2.location.name) if section_name is None else section_name,
+                'chapter': unicode(self.chapter.location.block_id) if chapter_name is None else chapter_name,
+                'section': unicode(self.section2.location.block_id) if section_name is None else section_name,
             }
         )
         response = self.client.get(url)
@@ -365,7 +367,7 @@ class ViewsTestCase(ModuleStoreTestCase):
 
         url = reverse(
             'courseware_chapter',
-            kwargs={'course_id': unicode(self.course.id), 'chapter': unicode(self.chapter.location.name)},
+            kwargs={'course_id': unicode(self.course.id), 'chapter': unicode(self.chapter.location.block_id)},
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
@@ -377,7 +379,7 @@ class ViewsTestCase(ModuleStoreTestCase):
         Create global staff user and log them in
         """
         self.global_staff = GlobalStaffFactory.create()  # pylint: disable=attribute-defined-outside-init
-        self.assertTrue(self.client.login(username=self.global_staff.username, password='test'))
+        self.assertTrue(self.client.login(username=self.global_staff.username, password=TEST_PASSWORD))
 
     def _create_url_for_enroll_staff(self):
         """
@@ -388,8 +390,8 @@ class ViewsTestCase(ModuleStoreTestCase):
             'courseware_section',
             kwargs={
                 'course_id': unicode(self.course_key),
-                'chapter': unicode(self.chapter.location.name),
-                'section': unicode(self.section.location.name),
+                'chapter': unicode(self.chapter.location.block_id),
+                'section': unicode(self.section.location.block_id),
             }
         )
         # create the url for enroll_staff view
@@ -444,7 +446,7 @@ class ViewsTestCase(ModuleStoreTestCase):
         self.assertNotIn(in_cart_span, response.content)
 
         # authenticated user with nothing in cart
-        self.assertTrue(self.client.login(username=self.user.username, password=self.password))
+        self.assertTrue(self.client.login(username=self.user.username, password=TEST_PASSWORD))
         response = self.client.get(reverse('about_course', args=[unicode(course.id)]))
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(in_cart_span, response.content)
@@ -465,24 +467,23 @@ class ViewsTestCase(ModuleStoreTestCase):
             _id(bool): Tell the method to either expect an id in the href or not.
 
         """
-        checkout_page = '/test_basket/'
         sku = 'TEST123'
-        CommerceConfiguration.objects.create(
-            checkout_on_ecommerce_service=True,
-            single_course_checkout_page=checkout_page
-        )
+        configuration = CommerceConfiguration.objects.create(checkout_on_ecommerce_service=True)
         course = CourseFactory.create()
         CourseModeFactory(mode_slug=CourseMode.PROFESSIONAL, course_id=course.id, sku=sku, min_price=1)
 
         if is_anonymous:
             self.client.logout()
         else:
-            self.assertTrue(self.client.login(username=self.user.username, password=self.password))
+            self.assertTrue(self.client.login(username=self.user.username, password=TEST_PASSWORD))
 
         # Construct the link according the following scenarios and verify its presence in the response:
         #      (1) shopping cart is enabled and the user is not logged in
         #      (2) shopping cart is enabled and the user is logged in
-        href = '<a href="{uri_stem}?sku={sku}" class="add-to-cart">'.format(uri_stem=checkout_page, sku=sku)
+        href = '<a href="{uri_stem}?sku={sku}" class="add-to-cart">'.format(
+            uri_stem=configuration.basket_checkout_page,
+            sku=sku,
+        )
 
         # Generate the course about page content
         response = self.client.get(reverse('about_course', args=[unicode(course.id)]))
@@ -517,8 +518,20 @@ class ViewsTestCase(ModuleStoreTestCase):
         self.assertEqual(views.user_groups(mock_user), [])
 
     def test_get_redirect_url(self):
-        self.assertIn(
-            'activate_block_id',
+        # test the course location
+        self.assertEqual(
+            u'/courses/{course_key}/courseware?{activate_block_id}'.format(
+                course_key=text_type(self.course_key),
+                activate_block_id=urlencode({'activate_block_id': text_type(self.course.location)})
+            ),
+            get_redirect_url(self.course_key, self.course.location),
+        )
+        # test a section location
+        self.assertEqual(
+            u'/courses/{course_key}/courseware/Chapter_1/Sequential_1/?{activate_block_id}'.format(
+                course_key=text_type(self.course_key),
+                activate_block_id=urlencode({'activate_block_id': text_type(self.section.location)})
+            ),
             get_redirect_url(self.course_key, self.section.location),
         )
 
@@ -535,11 +548,11 @@ class ViewsTestCase(ModuleStoreTestCase):
             '/courses',
             unicode(self.course.id),
             'courseware',
-            self.chapter.location.name,
-            self.section.location.name,
+            self.chapter.location.block_id,
+            self.section.location.block_id,
             'f'
         ])
-        self.assertTrue(self.client.login(username=self.user.username, password=self.password))
+        self.assertTrue(self.client.login(username=self.user.username, password=TEST_PASSWORD))
         response = self.client.get(request_url)
         self.assertEqual(response.status_code, 404)
 
@@ -548,11 +561,11 @@ class ViewsTestCase(ModuleStoreTestCase):
             '/courses',
             unicode(self.course.id),
             'courseware',
-            self.chapter.location.name,
-            self.section.location.name,
+            self.chapter.location.block_id,
+            self.section.location.block_id,
             '1'
         ]
-        self.assertTrue(self.client.login(username=self.user.username, password=self.password))
+        self.assertTrue(self.client.login(username=self.user.username, password=TEST_PASSWORD))
         for idx, val in enumerate(url_parts):
             url_parts_copy = url_parts[:]
             url_parts_copy[idx] = val + u'χ'
@@ -560,45 +573,11 @@ class ViewsTestCase(ModuleStoreTestCase):
             response = self.client.get(request_url)
             self.assertEqual(response.status_code, 404)
 
-    @override_settings(PAID_COURSE_REGISTRATION_CURRENCY=["USD", "$"])
-    def test_get_cosmetic_display_price(self):
-        """
-        Check that get_cosmetic_display_price() returns the correct price given its inputs.
-        """
-        registration_price = 99
-        self.course.cosmetic_display_price = 10
-        # Since registration_price is set, it overrides the cosmetic_display_price and should be returned
-        self.assertEqual(views.get_cosmetic_display_price(self.course, registration_price), "$99")
-
-        registration_price = 0
-        # Since registration_price is not set, cosmetic_display_price should be returned
-        self.assertEqual(views.get_cosmetic_display_price(self.course, registration_price), "$10")
-
-        self.course.cosmetic_display_price = 0
-        # Since both prices are not set, there is no price, thus "Free"
-        self.assertEqual(views.get_cosmetic_display_price(self.course, registration_price), "Free")
-
     def test_jump_to_invalid(self):
         # TODO add a test for invalid location
         # TODO add a test for no data *
         response = self.client.get(reverse('jump_to', args=['foo/bar/baz', 'baz']))
         self.assertEquals(response.status_code, 404)
-
-    @unittest.skip
-    def test_no_end_on_about_page(self):
-        # Toy course has no course end date or about/end_date blob
-        self.verify_end_date('edX/toy/TT_2012_Fall')
-
-    @unittest.skip
-    def test_no_end_about_blob(self):
-        # test_end has a course end date, no end_date HTML blob
-        self.verify_end_date("edX/test_end/2012_Fall", "Sep 17, 2015")
-
-    @unittest.skip
-    def test_about_blob_end_date(self):
-        # test_about_blob_end_date has both a course end date and an end_date HTML blob.
-        # HTML blob wins
-        self.verify_end_date("edX/test_about_blob_end_date/2012_Fall", "Learning never ends")
 
     def verify_end_date(self, course_id, expected_end_text=None):
         """
@@ -751,7 +730,7 @@ class ViewsTestCase(ModuleStoreTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('Financial Assistance Application', response.content)
 
-    @ddt.data(([CourseMode.AUDIT, CourseMode.VERIFIED], CourseMode.AUDIT, True, datetime.now(UTC) - timedelta(days=1)),
+    @ddt.data(([CourseMode.AUDIT, CourseMode.VERIFIED], CourseMode.AUDIT, True, YESTERDAY),
               ([CourseMode.AUDIT, CourseMode.VERIFIED], CourseMode.VERIFIED, True, None),
               ([CourseMode.AUDIT, CourseMode.VERIFIED], CourseMode.AUDIT, False, None),
               ([CourseMode.AUDIT], CourseMode.AUDIT, False, None))
@@ -770,7 +749,7 @@ class ViewsTestCase(ModuleStoreTestCase):
 
         # Create Course Modes
         for mode in course_modes:
-            CourseModeFactory.create(mode_slug=mode, course_id=course.id, expiration_datetime=expiration)
+            CourseModeFactory.create(mode_slug=mode, course_id=course.id, expiration_datetime=self.DATES[expiration])
 
         # Enroll user in the course
         CourseEnrollmentFactory(course_id=course.id, user=self.user, mode=enrollment_mode)
@@ -802,7 +781,12 @@ class ViewsTestCase(ModuleStoreTestCase):
         CourseModeFactory.create(mode_slug=CourseMode.VERIFIED, course_id=course)
 
         # Enroll user in the course
-        enrollment = CourseEnrollmentFactory(course_id=course, user=self.user, mode=CourseMode.AUDIT)
+        # Don't use the CourseEnrollmentFactory since it ensures a CourseOverview is available
+        enrollment = CourseEnrollment.objects.create(
+            course_id=course,
+            user=self.user,
+            mode=CourseMode.AUDIT,
+        )
 
         self.assertEqual(enrollment.course_overview, None)
 
@@ -922,6 +906,7 @@ class ViewsTestCase(ModuleStoreTestCase):
             response = self.client.get(url)
             self.assertRedirects(response, reverse('signin_user') + '?next=' + url)
 
+    @override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
     def test_bypass_course_info(self):
         course_id = unicode(self.course_key)
 
@@ -945,6 +930,7 @@ class ViewsTestCase(ModuleStoreTestCase):
         self.assertEqual(response.status_code, 200)
 
     # TODO: TNL-6387: Remove test
+    @override_waffle_flag(COURSE_OUTLINE_PAGE_FLAG, active=False)
     def test_accordion(self):
         """
         This needs a response_context, which is not included in the render_accordion's main method
@@ -971,7 +957,7 @@ class ViewsTestCase(ModuleStoreTestCase):
 class TestProgramMarketingView(SharedModuleStoreTestCase):
     """Unit tests for the program marketing page."""
     program_uuid = str(uuid4())
-    url = reverse('program_marketing_view', kwargs={'program_uuid': program_uuid})
+    url = reverse_lazy('program_marketing_view', kwargs={'program_uuid': program_uuid})
 
     @classmethod
     def setUpClass(cls):
@@ -981,7 +967,11 @@ class TestProgramMarketingView(SharedModuleStoreTestCase):
         course_run = CourseRunFactory(key=unicode(modulestore_course.id))  # pylint: disable=no-member
         course = CatalogCourseFactory(course_runs=[course_run])
 
-        cls.data = ProgramFactory(uuid=cls.program_uuid, courses=[course])
+        cls.data = ProgramFactory(
+            courses=[course],
+            is_program_eligible_for_one_click_purchase=False,
+            uuid=cls.program_uuid,
+        )
 
     def test_404_if_no_data(self, mock_cache):
         """
@@ -1036,6 +1026,7 @@ class BaseDueDateTests(ModuleStoreTestCase):
         course = modulestore().get_course(course.id)
         self.assertIsNotNone(course.get_children()[0].get_children()[0].due)
         CourseEnrollmentFactory(user=self.user, course_id=course.id)
+        CourseOverview.load_from_module_store(course.id)
         return course
 
     def setUp(self):
@@ -1045,7 +1036,7 @@ class BaseDueDateTests(ModuleStoreTestCase):
 
         self.time_with_tz = "2013-09-18 11:30:00+00:00"
 
-    def test_backwards_compatability(self):
+    def test_backwards_compatibility(self):
         # The test course being used has show_timezone = False in the policy file
         # (and no due_date_display_format set). This is to test our backwards compatibility--
         # in course_module's init method, the date_display_format will be set accordingly to
@@ -1093,6 +1084,7 @@ class TestProgressDueDate(BaseDueDateTests):
         return self.client.get(reverse('progress', args=[unicode(course.id)]))
 
 
+# TODO: LEARNER-71: Delete entire TestAccordionDueDate class
 class TestAccordionDueDate(BaseDueDateTests):
     """
     Test that the accordion page displays due dates correctly
@@ -1105,6 +1097,31 @@ class TestAccordionDueDate(BaseDueDateTests):
             reverse('courseware', args=[unicode(course.id)]),
             follow=True
         )
+
+    # TODO: LEARNER-71: Delete entire TestAccordionDueDate class
+    @override_waffle_flag(COURSE_OUTLINE_PAGE_FLAG, active=False)
+    def test_backwards_compatibility(self):
+        super(TestAccordionDueDate, self).test_backwards_compatibility()
+
+    # TODO: LEARNER-71: Delete entire TestAccordionDueDate class
+    @override_waffle_flag(COURSE_OUTLINE_PAGE_FLAG, active=False)
+    def test_defaults(self):
+        super(TestAccordionDueDate, self).test_defaults()
+
+    # TODO: LEARNER-71: Delete entire TestAccordionDueDate class
+    @override_waffle_flag(COURSE_OUTLINE_PAGE_FLAG, active=False)
+    def test_format_date(self):
+        super(TestAccordionDueDate, self).test_format_date()
+
+    # TODO: LEARNER-71: Delete entire TestAccordionDueDate class
+    @override_waffle_flag(COURSE_OUTLINE_PAGE_FLAG, active=False)
+    def test_format_invalid(self):
+        super(TestAccordionDueDate, self).test_format_invalid()
+
+    # TODO: LEARNER-71: Delete entire TestAccordionDueDate class
+    @override_waffle_flag(COURSE_OUTLINE_PAGE_FLAG, active=False)
+    def test_format_none(self):
+        super(TestAccordionDueDate, self).test_format_none()
 
 
 @attr(shard=1)
@@ -1147,47 +1164,37 @@ class StartDateTests(ModuleStoreTestCase):
         # This should return in the format '%Y-%m-%dT%H:%M:%S%z'
         self.assertContains(response, "2013-09-16T07:17:28+0000")
 
-    @patch(
-        'util.date_utils.pgettext',
-        fake_pgettext(translations={("abbreviated month name", "Jul"): "JULY", })
-    )
-    @patch(
-        'util.date_utils.ugettext',
-        fake_ugettext(translations={"SHORT_DATE_FORMAT": "%Y-%b-%d", })
-    )
-    @unittest.skip
-    def test_format_localized_in_xml_course(self):
-        response = self.get_about_response(SlashSeparatedCourseKey('edX', 'toy', 'TT_2012_Fall'))
-        # The start date is set in common/test/data/two_toys/policies/TT_2012_Fall/policy.json
-        self.assertContains(response, "2015-JULY-17")
-
 
 # pylint: disable=protected-access, no-member
 @attr(shard=1)
-@override_settings(ENABLE_ENTERPRISE_INTEGRATION=False)
-@ddt.ddt
-class ProgressPageTests(ModuleStoreTestCase):
+class ProgressPageBaseTests(ModuleStoreTestCase):
     """
-    Tests that verify that the progress page works correctly.
+    Base class for progress page tests.
     """
 
     ENABLED_CACHES = ['default', 'mongo_modulestore_inheritance', 'loc_cache']
     ENABLED_SIGNALS = ['course_published']
 
     def setUp(self):
-        super(ProgressPageTests, self).setUp()
+        super(ProgressPageBaseTests, self).setUp()
         self.user = UserFactory.create()
         self.assertTrue(self.client.login(username=self.user.username, password='test'))
 
         self.setup_course()
 
-    def setup_course(self, **options):
+    def create_course(self, **options):
         """Create the test course."""
         self.course = CourseFactory.create(
             start=datetime(2013, 9, 16, 7, 17, 28),
             grade_cutoffs={u'çü†øƒƒ': 0.75, 'Pass': 0.5},
+            end=datetime.now(),
+            certificate_available_date=datetime.now(UTC),
             **options
         )
+
+    def setup_course(self, **course_options):
+        """Create the test course and content, and enroll the user."""
+        self.create_course(**course_options)
         with self.store.bulk_operations(self.course.id):
             self.chapter = ItemFactory.create(category='chapter', parent_location=self.course.location)
             self.section = ItemFactory.create(category='sequential', parent_location=self.chapter.location)
@@ -1197,7 +1204,7 @@ class ProgressPageTests(ModuleStoreTestCase):
 
     def _get_progress_page(self, expected_status_code=200):
         """
-        Gets the progress page for the user in the course.
+        Gets the progress page for the currently logged-in user.
         """
         resp = self.client.get(
             reverse('progress', args=[unicode(self.course.id)])
@@ -1215,6 +1222,13 @@ class ProgressPageTests(ModuleStoreTestCase):
         self.assertEqual(resp.status_code, expected_status_code)
         return resp
 
+
+# pylint: disable=protected-access, no-member
+@ddt.ddt
+class ProgressPageTests(ProgressPageBaseTests):
+    """
+    Tests that verify that the progress page works correctly.
+    """
     @ddt.data('"><script>alert(1)</script>', '<script>alert(1)</script>', '</script><script>alert(1)</script>')
     def test_progress_page_xss_prevent(self, malicious_code):
         """
@@ -1311,10 +1325,6 @@ class ProgressPageTests(ModuleStoreTestCase):
         self.assertNotContains(resp, 'Request Certificate')
 
     @patch.dict('django.conf.settings.FEATURES', {'CERTIFICATES_HTML_VIEW': True})
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}}),
-    )
     def test_view_certificate_link(self):
         """
         If certificate web view is enabled then certificate web view button should appear for user who certificate is
@@ -1325,7 +1335,7 @@ class ProgressPageTests(ModuleStoreTestCase):
             course_id=self.course.id,
             status=CertificateStatuses.downloadable,
             download_url="http://www.example.com/certificate.pdf",
-            mode='honor'
+            mode='verified'
         )
 
         # Enable the feature, but do not enable it for this course
@@ -1351,29 +1361,36 @@ class ProgressPageTests(ModuleStoreTestCase):
         self.course.cert_html_view_enabled = True
         self.course.save()
         self.store.update_item(self.course, self.user.id)
+        CourseEnrollment.enroll(self.user, self.course.id, mode="verified")
+        with patch(
+                'lms.djangoapps.verify_student.models.SoftwareSecurePhotoVerification.user_is_verified'
+        ) as user_verify:
+            user_verify.return_value = True
 
-        resp = self._get_progress_page()
-        self.assertContains(resp, u"View Certificate")
+            with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+                course_grade = mock_create.return_value
+                course_grade.passed = True
+                course_grade.summary = {'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}}
 
-        self.assertContains(resp, u"You can keep working for a higher grade")
-        cert_url = certs_api.get_certificate_url(course_id=self.course.id, uuid=certificate.verify_uuid)
-        self.assertContains(resp, cert_url)
+                resp = self._get_progress_page()
 
-        # when course certificate is not active
-        certificates[0]['is_active'] = False
-        self.store.update_item(self.course, self.user.id)
+                self.assertContains(resp, u"View Certificate")
 
-        resp = self._get_progress_page()
-        self.assertNotContains(resp, u"View Your Certificate")
-        self.assertNotContains(resp, u"You can now view your certificate")
-        self.assertContains(resp, "working on it...")
-        self.assertContains(resp, "creating your certificate")
+                self.assertContains(resp, u"earned a certificate for this course")
+                cert_url = certs_api.get_certificate_url(course_id=self.course.id, uuid=certificate.verify_uuid)
+                self.assertContains(resp, cert_url)
+
+                # when course certificate is not active
+                certificates[0]['is_active'] = False
+                self.store.update_item(self.course, self.user.id)
+
+                resp = self._get_progress_page()
+                self.assertNotContains(resp, u"View Your Certificate")
+                self.assertNotContains(resp, u"You can now view your certificate")
+                self.assertContains(resp, "working on it...")
+                self.assertContains(resp, "creating your certificate")
 
     @patch.dict('django.conf.settings.FEATURES', {'CERTIFICATES_HTML_VIEW': False})
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}})
-    )
     def test_view_certificate_link_hidden(self):
         """
         If certificate web view is disabled then certificate web view button should not appear for user who certificate
@@ -1384,7 +1401,7 @@ class ProgressPageTests(ModuleStoreTestCase):
             course_id=self.course.id,
             status=CertificateStatuses.downloadable,
             download_url="http://www.example.com/certificate.pdf",
-            mode='honor'
+            mode='verified'
         )
 
         # Enable the feature, but do not enable it for this course
@@ -1393,40 +1410,48 @@ class ProgressPageTests(ModuleStoreTestCase):
         # Enable certificate generation for this course
         certs_api.set_cert_generation_enabled(self.course.id, True)
 
-        resp = self._get_progress_page()
-        self.assertContains(resp, u"Download Your Certificate")
+        CourseEnrollment.enroll(self.user, self.course.id, mode="verified")
+        with patch(
+                'lms.djangoapps.verify_student.models.SoftwareSecurePhotoVerification.user_is_verified'
+        ) as user_verify:
+            user_verify.return_value = True
 
-    @ddt.data(
-        *itertools.product((True, False), (True, False))
-    )
-    @ddt.unpack
-    def test_progress_queries_paced_courses(self, self_paced, self_paced_enabled):
+            with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+                course_grade = mock_create.return_value
+                course_grade.passed = True
+                course_grade.summary = {'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}}
+
+                resp = self._get_progress_page()
+                self.assertContains(resp, u"Download Your Certificate")
+
+    @ddt.data(True, False)
+    def test_progress_queries_paced_courses(self, self_paced):
         """Test that query counts remain the same for self-paced and instructor-paced courses."""
-        SelfPacedConfiguration(enabled=self_paced_enabled).save()
         self.setup_course(self_paced=self_paced)
-        with self.assertNumQueries(40), check_mongo_calls(1):
+        with self.assertNumQueries(34 if self_paced else 33, table_blacklist=QUERY_COUNT_TABLE_BLACKLIST), check_mongo_calls(1):
             self._get_progress_page()
 
+    @patch.dict(settings.FEATURES, {'ASSUME_ZERO_GRADE_IF_ABSENT_FOR_ALL_TESTS': False})
     @ddt.data(
-        (False, 40, 26),
-        (True, 33, 22)
+        (False, 40, 27),
+        (True, 33, 23)
     )
     @ddt.unpack
     def test_progress_queries(self, enable_waffle, initial, subsequent):
         self.setup_course()
         with grades_waffle().override(ASSUME_ZERO_GRADE_IF_ABSENT, active=enable_waffle):
-            with self.assertNumQueries(initial), check_mongo_calls(1):
+            with self.assertNumQueries(
+                initial, table_blacklist=QUERY_COUNT_TABLE_BLACKLIST
+            ), check_mongo_calls(1):
                 self._get_progress_page()
 
             # subsequent accesses to the progress page require fewer queries.
             for _ in range(2):
-                with self.assertNumQueries(subsequent), check_mongo_calls(1):
+                with self.assertNumQueries(
+                    subsequent, table_blacklist=QUERY_COUNT_TABLE_BLACKLIST
+                ), check_mongo_calls(1):
                     self._get_progress_page()
 
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}})
-    )
     @ddt.data(
         *itertools.product(
             (
@@ -1450,30 +1475,31 @@ class ProgressPageTests(ModuleStoreTestCase):
             'lms.djangoapps.verify_student.models.SoftwareSecurePhotoVerification.user_is_verified'
         ) as user_verify:
             user_verify.return_value = user_verified
-            resp = self.client.get(
-                reverse('progress', args=[unicode(self.course.id)])
-            )
+            with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+                course_grade = mock_create.return_value
+                course_grade.passed = True
+                course_grade.summary = {
+                    'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}
+                }
 
-            cert_button_hidden = course_mode is CourseMode.AUDIT or \
-                course_mode in CourseMode.VERIFIED_MODES and not user_verified
+                resp = self._get_progress_page()
 
-            self.assertEqual(
-                cert_button_hidden,
-                'Request Certificate' not in resp.content
-            )
+                cert_button_hidden = course_mode in (CourseMode.AUDIT, CourseMode.HONOR) or \
+                    course_mode in CourseMode.VERIFIED_MODES and not user_verified
+
+                self.assertEqual(
+                    cert_button_hidden,
+                    'Request Certificate' not in resp.content
+                )
 
     @patch.dict('django.conf.settings.FEATURES', {'CERTIFICATES_HTML_VIEW': True})
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}})
-    )
     def test_page_with_invalidated_certificate_with_html_view(self):
         """
         Verify that for html certs if certificate is marked as invalidated than
         re-generate button should not appear on progress page.
         """
         generated_certificate = self.generate_certificate(
-            "http://www.example.com/certificate.pdf", "honor"
+            "http://www.example.com/certificate.pdf", "verified"
         )
 
         # Course certificate configurations
@@ -1492,32 +1518,95 @@ class ProgressPageTests(ModuleStoreTestCase):
         self.course.cert_html_view_enabled = True
         self.course.save()
         self.store.update_item(self.course, self.user.id)
+        CourseEnrollment.enroll(self.user, self.course.id, mode="verified")
+        with patch(
+                'lms.djangoapps.verify_student.models.SoftwareSecurePhotoVerification.user_is_verified'
+        ) as user_verify:
+            user_verify.return_value = True
 
-        resp = self._get_progress_page()
-        self.assertContains(resp, u"View Certificate")
-        self.assert_invalidate_certificate(generated_certificate)
+            with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+                course_grade = mock_create.return_value
+                course_grade.passed = True
+                course_grade.summary = {
+                    'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}
+                }
 
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}})
-    )
+                resp = self._get_progress_page()
+                self.assertContains(resp, u"View Certificate")
+                self.assert_invalidate_certificate(generated_certificate)
+
+    @patch.dict('django.conf.settings.FEATURES', {'CERTIFICATES_HTML_VIEW': True})
+    def test_page_with_whitelisted_certificate_with_html_view(self):
+        """
+        Verify that for white listed user the view certificate is
+        appearing on dashboard
+        """
+        generated_certificate = self.generate_certificate(
+            "http://www.example.com/certificate.pdf", "verified"
+        )
+
+        # Course certificate configurations
+        certificates = [
+            {
+                'id': 1,
+                'name': 'dummy',
+                'description': 'dummy description',
+                'course_title': 'dummy title',
+                'signatories': [],
+                'version': 1,
+                'is_active': True
+            }
+        ]
+        self.course.certificates = {'certificates': certificates}
+        self.course.cert_html_view_enabled = True
+        self.course.save()
+        self.store.update_item(self.course, self.user.id)
+        CertificateWhitelist.objects.create(
+            user=self.user,
+            course_id=self.course.id,
+            whitelist=True
+        )
+        CourseEnrollment.enroll(self.user, self.course.id, mode="verified")
+        with patch(
+                'lms.djangoapps.verify_student.models.SoftwareSecurePhotoVerification.user_is_verified'
+        ) as user_verify:
+            user_verify.return_value = True
+
+            with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+                course_grade = mock_create.return_value
+                course_grade.passed = False
+                course_grade.summary = {
+                    'grade': 'Fail', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}
+                }
+
+                resp = self._get_progress_page()
+                self.assertContains(resp, u"View Certificate")
+                self.assert_invalidate_certificate(generated_certificate)
+
     def test_page_with_invalidated_certificate_with_pdf(self):
         """
         Verify that for pdf certs if certificate is marked as invalidated than
         re-generate button should not appear on progress page.
         """
         generated_certificate = self.generate_certificate(
-            "http://www.example.com/certificate.pdf", "honor"
+            "http://www.example.com/certificate.pdf", "verified"
         )
+        CourseEnrollment.enroll(self.user, self.course.id, mode="verified")
+        with patch(
+                'lms.djangoapps.verify_student.models.SoftwareSecurePhotoVerification.user_is_verified'
+        ) as user_verify:
+            user_verify.return_value = True
 
-        resp = self._get_progress_page()
-        self.assertContains(resp, u'Download Your Certificate')
-        self.assert_invalidate_certificate(generated_certificate)
+            with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+                course_grade = mock_create.return_value
+                course_grade.passed = True
+                course_grade.summary = {'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}}
 
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}})
-    )
+                resp = self._get_progress_page()
+                self.assertContains(resp, u'Download Your Certificate')
+                self.assert_invalidate_certificate(generated_certificate)
+
+    @patch('courseware.views.views.is_course_passed', PropertyMock(return_value=True))
     def test_message_for_audit_mode(self):
         """ Verify that message appears on progress page, if learner is enrolled
          in audit mode.
@@ -1525,19 +1614,46 @@ class ProgressPageTests(ModuleStoreTestCase):
         user = UserFactory.create()
         self.assertTrue(self.client.login(username=user.username, password='test'))
         CourseEnrollmentFactory(user=user, course_id=self.course.id, mode=CourseMode.AUDIT)
-        response = self._get_progress_page()
 
-        self.assertContains(
-            response,
-            u'You are enrolled in the audit track for this course. The audit track does not include a certificate.'
-        )
+        with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+            course_grade = mock_create.return_value
+            course_grade.passed = True
+            course_grade.summary = {'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}}
+
+            response = self._get_progress_page()
+
+            self.assertContains(
+                response,
+                u'You are enrolled in the audit track for this course. The audit track does not include a certificate.'
+            )
+
+    @patch('courseware.views.views.is_course_passed', PropertyMock(return_value=True))
+    def test_message_for_honor_mode(self):
+        """ Verify that message appears on progress page, if learner is enrolled
+         in honor mode.
+        """
+        user = UserFactory.create()
+        self.assertTrue(self.client.login(username=user.username, password='test'))
+        CourseEnrollmentFactory(user=user, course_id=self.course.id, mode=CourseMode.HONOR)
+
+        with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+            course_grade = mock_create.return_value
+            course_grade.passed = True
+            course_grade.summary = {'grade': 'Pass', 'percent': 0.75, 'section_breakdown': [], 'grade_breakdown': {}}
+
+            response = self._get_progress_page()
+
+            self.assertContains(
+                response,
+                u'You are enrolled in the honor track for this course. The honor track does not include a certificate.'
+            )
 
     def test_invalidated_cert_data(self):
         """
         Verify that invalidated cert data is returned if cert is invalidated.
         """
         generated_certificate = self.generate_certificate(
-            "http://www.example.com/certificate.pdf", "honor"
+            "http://www.example.com/certificate.pdf", "verified"
         )
 
         CertificateInvalidationFactory.create(
@@ -1546,7 +1662,7 @@ class ProgressPageTests(ModuleStoreTestCase):
         )
         # Invalidate user certificate
         generated_certificate.invalidate()
-        response = views._get_cert_data(self.user, self.course, self.course.id, True, CourseMode.HONOR)
+        response = views._get_cert_data(self.user, self.course, CourseMode.VERIFIED, MagicMock(passed=True))
         self.assertEqual(response.cert_status, 'invalidated')
         self.assertEqual(response.title, 'Your certificate has been invalidated')
 
@@ -1555,11 +1671,17 @@ class ProgressPageTests(ModuleStoreTestCase):
         Verify that downloadable cert data is returned if cert is downloadable.
         """
         self.generate_certificate(
-            "http://www.example.com/certificate.pdf", "honor"
+            "http://www.example.com/certificate.pdf", "verified"
         )
-        with patch('certificates.api.certificate_downloadable_status',
-                   return_value=self.mock_certificate_downloadable_status(is_downloadable=True)):
-            response = views._get_cert_data(self.user, self.course, self.course.id, True, CourseMode.HONOR)
+        CourseEnrollment.enroll(self.user, self.course.id, mode="verified")
+        with patch(
+                'lms.djangoapps.verify_student.models.SoftwareSecurePhotoVerification.user_is_verified'
+        ) as user_verify:
+            user_verify.return_value = True
+
+            with patch('lms.djangoapps.certificates.api.certificate_downloadable_status',
+                       return_value=self.mock_certificate_downloadable_status(is_downloadable=True)):
+                response = views._get_cert_data(self.user, self.course, CourseMode.VERIFIED, MagicMock(passed=True))
 
         self.assertEqual(response.cert_status, 'downloadable')
         self.assertEqual(response.title, 'Your certificate is available')
@@ -1569,11 +1691,11 @@ class ProgressPageTests(ModuleStoreTestCase):
         Verify that generating cert data is returned if cert is generating.
         """
         self.generate_certificate(
-            "http://www.example.com/certificate.pdf", "honor"
+            "http://www.example.com/certificate.pdf", "verified"
         )
-        with patch('certificates.api.certificate_downloadable_status',
+        with patch('lms.djangoapps.certificates.api.certificate_downloadable_status',
                    return_value=self.mock_certificate_downloadable_status(is_generating=True)):
-            response = views._get_cert_data(self.user, self.course, self.course.id, True, CourseMode.HONOR)
+            response = views._get_cert_data(self.user, self.course, CourseMode.VERIFIED, MagicMock(passed=True))
 
         self.assertEqual(response.cert_status, 'generating')
         self.assertEqual(response.title, "We're working on it...")
@@ -1583,11 +1705,11 @@ class ProgressPageTests(ModuleStoreTestCase):
         Verify that unverified cert data is returned if cert is unverified.
         """
         self.generate_certificate(
-            "http://www.example.com/certificate.pdf", "honor"
+            "http://www.example.com/certificate.pdf", "verified"
         )
-        with patch('certificates.api.certificate_downloadable_status',
+        with patch('lms.djangoapps.certificates.api.certificate_downloadable_status',
                    return_value=self.mock_certificate_downloadable_status(is_unverified=True)):
-            response = views._get_cert_data(self.user, self.course, self.course.id, True, CourseMode.HONOR)
+            response = views._get_cert_data(self.user, self.course, CourseMode.VERIFIED, MagicMock(passed=True))
 
         self.assertEqual(response.cert_status, 'unverified')
         self.assertEqual(response.title, "Certificate unavailable")
@@ -1597,11 +1719,16 @@ class ProgressPageTests(ModuleStoreTestCase):
         Verify that requested cert data is returned if cert is to be requested.
         """
         self.generate_certificate(
-            "http://www.example.com/certificate.pdf", "honor"
+            "http://www.example.com/certificate.pdf", "verified"
         )
-        with patch('certificates.api.certificate_downloadable_status',
-                   return_value=self.mock_certificate_downloadable_status()):
-            response = views._get_cert_data(self.user, self.course, self.course.id, True, CourseMode.HONOR)
+        CourseEnrollment.enroll(self.user, self.course.id, mode="verified")
+        with patch(
+                'lms.djangoapps.verify_student.models.SoftwareSecurePhotoVerification.user_is_verified'
+        ) as user_verify:
+            user_verify.return_value = True
+            with patch('lms.djangoapps.certificates.api.certificate_downloadable_status',
+                       return_value=self.mock_certificate_downloadable_status()):
+                response = views._get_cert_data(self.user, self.course, CourseMode.VERIFIED, MagicMock(passed=True))
 
         self.assertEqual(response.cert_status, 'requesting')
         self.assertEqual(response.title, "Congratulations, you qualified for a certificate!")
@@ -1649,6 +1776,285 @@ class ProgressPageTests(ModuleStoreTestCase):
         }
 
 
+# pylint: disable=protected-access, no-member
+@ddt.ddt
+class ProgressPageShowCorrectnessTests(ProgressPageBaseTests):
+    """
+    Tests that verify that the progress page works correctly when displaying subsections where correctness is hidden.
+    """
+    # Constants used in the test data
+    NOW = datetime.now(UTC)
+    DAY_DELTA = timedelta(days=1)
+    YESTERDAY = 'yesterday'
+    TODAY = 'today'
+    TOMORROW = 'tomorrow'
+    GRADER_TYPE = 'Homework'
+    DATES = {
+        YESTERDAY: NOW - DAY_DELTA,
+        TODAY: NOW,
+        TOMORROW: NOW + DAY_DELTA,
+        None: None,
+    }
+
+    def setUp(self):
+        super(ProgressPageShowCorrectnessTests, self).setUp()
+        self.staff_user = UserFactory.create(is_staff=True)
+
+    def setup_course(self, show_correctness='', due_date=None, graded=False, **course_options):
+        """
+        Set up course with a subsection with the given show_correctness, due_date, and graded settings.
+        """
+        # Use a simple grading policy
+        course_options['grading_policy'] = {
+            "GRADER": [{
+                "type": self.GRADER_TYPE,
+                "min_count": 2,
+                "drop_count": 0,
+                "short_label": "HW",
+                "weight": 1.0
+            }],
+            "GRADE_CUTOFFS": {
+                'A': .9,
+                'B': .33
+            }
+        }
+        self.create_course(**course_options)
+
+        metadata = dict(
+            show_correctness=show_correctness,
+        )
+        if due_date is not None:
+            metadata['due'] = due_date
+        if graded:
+            metadata['graded'] = True
+            metadata['format'] = self.GRADER_TYPE
+
+        with self.store.bulk_operations(self.course.id):
+            self.chapter = ItemFactory.create(category='chapter', parent_location=self.course.location,
+                                              display_name="Section 1")
+            self.section = ItemFactory.create(category='sequential', parent_location=self.chapter.location,
+                                              display_name="Subsection 1", metadata=metadata)
+            self.vertical = ItemFactory.create(category='vertical', parent_location=self.section.location)
+
+        CourseEnrollmentFactory(user=self.user, course_id=self.course.id, mode=CourseMode.HONOR)
+
+    def add_problem(self):
+        """
+        Add a problem to the subsection
+        """
+        problem_xml = MultipleChoiceResponseXMLFactory().build_xml(
+            question_text='The correct answer is Choice 1',
+            choices=[True, False],
+            choice_names=['choice_0', 'choice_1']
+        )
+        self.problem = ItemFactory.create(category='problem', parent_location=self.vertical.location,
+                                          data=problem_xml, display_name='Problem 1')
+        # Re-fetch the course from the database
+        self.course = self.store.get_course(self.course.id)
+
+    def answer_problem(self, value=1, max_value=1):
+        """
+        Submit the given score to the problem on behalf of the user
+        """
+        # Get the module for the problem, as viewed by the user
+        field_data_cache = FieldDataCache.cache_for_descriptor_descendents(
+            self.course.id,
+            self.user,
+            self.course,
+            depth=2
+        )
+        # pylint: disable=protected-access
+        module = get_module(
+            self.user,
+            get_mock_request(self.user),
+            self.problem.scope_ids.usage_id,
+            field_data_cache,
+        )._xmodule
+
+        # Submit the given score/max_score to the problem xmodule
+        grade_dict = {'value': value, 'max_value': max_value, 'user_id': self.user.id}
+        module.system.publish(self.problem, 'grade', grade_dict)
+
+    def assert_progress_page_show_grades(self, response, show_correctness, due_date, graded,
+                                         show_grades, score, max_score, avg):
+        """
+        Ensures that grades and scores are shown or not shown on the progress page as required.
+        """
+
+        expected_score = "<dd>{score}/{max_score}</dd>".format(score=score, max_score=max_score)
+        percent = score / float(max_score)
+
+        if show_grades:
+            # If grades are shown, we should be able to see the current problem scores.
+            self.assertIn(expected_score, response.content)
+
+            if graded:
+                expected_summary_text = "Problem Scores:"
+            else:
+                expected_summary_text = "Practice Scores:"
+
+        else:
+            # If grades are hidden, we should not be able to see the current problem scores.
+            self.assertNotIn(expected_score, response.content)
+
+            if graded:
+                expected_summary_text = "Problem scores are hidden"
+            else:
+                expected_summary_text = "Practice scores are hidden"
+
+            if show_correctness == ShowCorrectness.PAST_DUE and due_date:
+                expected_summary_text += ' until the due date.'
+            else:
+                expected_summary_text += '.'
+
+        # Ensure that expected text is present
+        self.assertIn(expected_summary_text, response.content)
+
+    @ddt.data(
+        ('', None, False),
+        ('', None, True),
+        (ShowCorrectness.ALWAYS, None, False),
+        (ShowCorrectness.ALWAYS, None, True),
+        (ShowCorrectness.ALWAYS, YESTERDAY, False),
+        (ShowCorrectness.ALWAYS, YESTERDAY, True),
+        (ShowCorrectness.ALWAYS, TODAY, False),
+        (ShowCorrectness.ALWAYS, TODAY, True),
+        (ShowCorrectness.ALWAYS, TOMORROW, False),
+        (ShowCorrectness.ALWAYS, TOMORROW, True),
+        (ShowCorrectness.NEVER, None, False),
+        (ShowCorrectness.NEVER, None, True),
+        (ShowCorrectness.NEVER, YESTERDAY, False),
+        (ShowCorrectness.NEVER, YESTERDAY, True),
+        (ShowCorrectness.NEVER, TODAY, False),
+        (ShowCorrectness.NEVER, TODAY, True),
+        (ShowCorrectness.NEVER, TOMORROW, False),
+        (ShowCorrectness.NEVER, TOMORROW, True),
+        (ShowCorrectness.PAST_DUE, None, False),
+        (ShowCorrectness.PAST_DUE, None, True),
+        (ShowCorrectness.PAST_DUE, YESTERDAY, False),
+        (ShowCorrectness.PAST_DUE, YESTERDAY, True),
+        (ShowCorrectness.PAST_DUE, TODAY, False),
+        (ShowCorrectness.PAST_DUE, TODAY, True),
+        (ShowCorrectness.PAST_DUE, TOMORROW, False),
+        (ShowCorrectness.PAST_DUE, TOMORROW, True),
+    )
+    @ddt.unpack
+    def test_progress_page_no_problem_scores(self, show_correctness, due_date_name, graded):
+        """
+        Test that "no problem scores are present" for a course with no problems,
+        regardless of the various show correctness settings.
+        """
+        self.setup_course(show_correctness=show_correctness, due_date=self.DATES[due_date_name], graded=graded)
+        resp = self._get_progress_page()
+
+        # Test that no problem scores are present
+        self.assertIn('No problem scores in this section', resp.content)
+
+    @ddt.data(
+        ('', None, False, True),
+        ('', None, True, True),
+        (ShowCorrectness.ALWAYS, None, False, True),
+        (ShowCorrectness.ALWAYS, None, True, True),
+        (ShowCorrectness.ALWAYS, YESTERDAY, False, True),
+        (ShowCorrectness.ALWAYS, YESTERDAY, True, True),
+        (ShowCorrectness.ALWAYS, TODAY, False, True),
+        (ShowCorrectness.ALWAYS, TODAY, True, True),
+        (ShowCorrectness.ALWAYS, TOMORROW, False, True),
+        (ShowCorrectness.ALWAYS, TOMORROW, True, True),
+        (ShowCorrectness.NEVER, None, False, False),
+        (ShowCorrectness.NEVER, None, True, False),
+        (ShowCorrectness.NEVER, YESTERDAY, False, False),
+        (ShowCorrectness.NEVER, YESTERDAY, True, False),
+        (ShowCorrectness.NEVER, TODAY, False, False),
+        (ShowCorrectness.NEVER, TODAY, True, False),
+        (ShowCorrectness.NEVER, TOMORROW, False, False),
+        (ShowCorrectness.NEVER, TOMORROW, True, False),
+        (ShowCorrectness.PAST_DUE, None, False, True),
+        (ShowCorrectness.PAST_DUE, None, True, True),
+        (ShowCorrectness.PAST_DUE, YESTERDAY, False, True),
+        (ShowCorrectness.PAST_DUE, YESTERDAY, True, True),
+        (ShowCorrectness.PAST_DUE, TODAY, False, True),
+        (ShowCorrectness.PAST_DUE, TODAY, True, True),
+        (ShowCorrectness.PAST_DUE, TOMORROW, False, False),
+        (ShowCorrectness.PAST_DUE, TOMORROW, True, False),
+    )
+    @ddt.unpack
+    def test_progress_page_hide_scores_from_learner(self, show_correctness, due_date_name, graded, show_grades):
+        """
+        Test that problem scores are hidden on progress page when correctness is not available to the learner, and that
+        they are visible when it is.
+        """
+        due_date = self.DATES[due_date_name]
+        self.setup_course(show_correctness=show_correctness, due_date=due_date, graded=graded)
+        self.add_problem()
+
+        self.client.login(username=self.user.username, password='test')
+        resp = self._get_progress_page()
+
+        # Ensure that expected text is present
+        self.assert_progress_page_show_grades(resp, show_correctness, due_date, graded, show_grades, 0, 1, 0)
+
+        # Submit answers to the problem, and re-fetch the progress page
+        self.answer_problem()
+
+        resp = self._get_progress_page()
+
+        # Test that the expected text is still present.
+        self.assert_progress_page_show_grades(resp, show_correctness, due_date, graded, show_grades, 1, 1, .5)
+
+    @ddt.data(
+        ('', None, False, True),
+        ('', None, True, True),
+        (ShowCorrectness.ALWAYS, None, False, True),
+        (ShowCorrectness.ALWAYS, None, True, True),
+        (ShowCorrectness.ALWAYS, YESTERDAY, False, True),
+        (ShowCorrectness.ALWAYS, YESTERDAY, True, True),
+        (ShowCorrectness.ALWAYS, TODAY, False, True),
+        (ShowCorrectness.ALWAYS, TODAY, True, True),
+        (ShowCorrectness.ALWAYS, TOMORROW, False, True),
+        (ShowCorrectness.ALWAYS, TOMORROW, True, True),
+        (ShowCorrectness.NEVER, None, False, False),
+        (ShowCorrectness.NEVER, None, True, False),
+        (ShowCorrectness.NEVER, YESTERDAY, False, False),
+        (ShowCorrectness.NEVER, YESTERDAY, True, False),
+        (ShowCorrectness.NEVER, TODAY, False, False),
+        (ShowCorrectness.NEVER, TODAY, True, False),
+        (ShowCorrectness.NEVER, TOMORROW, False, False),
+        (ShowCorrectness.NEVER, TOMORROW, True, False),
+        (ShowCorrectness.PAST_DUE, None, False, True),
+        (ShowCorrectness.PAST_DUE, None, True, True),
+        (ShowCorrectness.PAST_DUE, YESTERDAY, False, True),
+        (ShowCorrectness.PAST_DUE, YESTERDAY, True, True),
+        (ShowCorrectness.PAST_DUE, TODAY, False, True),
+        (ShowCorrectness.PAST_DUE, TODAY, True, True),
+        (ShowCorrectness.PAST_DUE, TOMORROW, False, True),
+        (ShowCorrectness.PAST_DUE, TOMORROW, True, True),
+    )
+    @ddt.unpack
+    def test_progress_page_hide_scores_from_staff(self, show_correctness, due_date_name, graded, show_grades):
+        """
+        Test that problem scores are hidden from staff viewing a learner's progress page only if show_correctness=never.
+        """
+        due_date = self.DATES[due_date_name]
+        self.setup_course(show_correctness=show_correctness, due_date=due_date, graded=graded)
+        self.add_problem()
+
+        # Login as a course staff user to view the student progress page.
+        self.client.login(username=self.staff_user.username, password='test')
+
+        resp = self._get_student_progress_page()
+
+        # Ensure that expected text is present
+        self.assert_progress_page_show_grades(resp, show_correctness, due_date, graded, show_grades, 0, 1, 0)
+
+        # Submit answers to the problem, and re-fetch the progress page
+        self.answer_problem()
+        resp = self._get_student_progress_page()
+
+        # Test that the expected text is still present.
+        self.assert_progress_page_show_grades(resp, show_correctness, due_date, graded, show_grades, 1, 1, .5)
+
+
 @attr(shard=1)
 class VerifyCourseKeyDecoratorTests(TestCase):
     """
@@ -1676,54 +2082,6 @@ class VerifyCourseKeyDecoratorTests(TestCase):
 
 
 @attr(shard=1)
-class IsCoursePassedTests(ModuleStoreTestCase):
-    """
-    Tests for the is_course_passed helper function
-    """
-
-    SUCCESS_CUTOFF = 0.5
-
-    def setUp(self):
-        super(IsCoursePassedTests, self).setUp()
-
-        self.student = UserFactory()
-        self.course = CourseFactory.create(
-            org='edx',
-            number='verified',
-            display_name='Verified Course',
-            grade_cutoffs={'cutoff': 0.75, 'Pass': self.SUCCESS_CUTOFF}
-        )
-        self.request = RequestFactory()
-        self.request.user = self.student
-
-    def test_user_fails_if_not_clear_exam(self):
-        # If user has not grade then false will return
-        self.assertFalse(views.is_course_passed(self.course, None, self.student, self.request))
-
-    @patch('lms.djangoapps.grades.new.course_grade.CourseGrade.summary', PropertyMock(return_value={'percent': 0.9}))
-    def test_user_pass_if_percent_appears_above_passing_point(self):
-        # Mocking the grades.grade
-        # If user has above passing marks then True will return
-        self.assertTrue(views.is_course_passed(self.course, None, self.student, self.request))
-
-    @patch('lms.djangoapps.grades.new.course_grade.CourseGrade.summary', PropertyMock(return_value={'percent': 0.2}))
-    def test_user_fail_if_percent_appears_below_passing_point(self):
-        # Mocking the grades.grade
-        # If user has below passing marks then False will return
-        self.assertFalse(views.is_course_passed(self.course, None, self.student, self.request))
-
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'percent': SUCCESS_CUTOFF})
-    )
-    def test_user_with_passing_marks_and_achieved_marks_equal(self):
-        # Mocking the grades.grade
-        # If user's achieved passing marks are equal to the required passing
-        # marks then it will return True
-        self.assertTrue(views.is_course_passed(self.course, None, self.student, self.request))
-
-
-@attr(shard=1)
 class GenerateUserCertTests(ModuleStoreTestCase):
     """
     Tests for the view function Generated User Certs
@@ -1732,15 +2090,17 @@ class GenerateUserCertTests(ModuleStoreTestCase):
     def setUp(self):
         super(GenerateUserCertTests, self).setUp()
 
-        self.student = UserFactory(username='dummy', password='123456', email='test@mit.edu')
+        self.student = UserFactory()
         self.course = CourseFactory.create(
             org='edx',
             number='verified',
+            end=datetime.now(),
             display_name='Verified Course',
-            grade_cutoffs={'cutoff': 0.75, 'Pass': 0.5}
+            grade_cutoffs={'cutoff': 0.75, 'Pass': 0.5},
+            self_paced=True
         )
         self.enrollment = CourseEnrollment.enroll(self.student, self.course.id, mode='honor')
-        self.assertTrue(self.client.login(username=self.student, password='123456'))
+        self.assertTrue(self.client.login(username=self.student, password=TEST_PASSWORD))
         self.url = reverse('generate_user_cert', kwargs={'course_id': unicode(self.course.id)})
 
     def test_user_with_out_passing_grades(self):
@@ -1749,12 +2109,9 @@ class GenerateUserCertTests(ModuleStoreTestCase):
         self.assertEqual(resp.status_code, HttpResponseBadRequest.status_code)
         self.assertIn("Your certificate will be available when you pass the course.", resp.content)
 
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75})
-    )
+    @patch('courseware.views.views.is_course_passed', return_value=True)
     @override_settings(CERT_QUEUE='certificates', LMS_SEGMENT_KEY="foobar")
-    def test_user_with_passing_grade(self):
+    def test_user_with_passing_grade(self, mock_is_course_passed):
         # If user has above passing grading then json will return cert generating message and
         # status valid code
         # mocking xqueue and analytics
@@ -1765,6 +2122,7 @@ class GenerateUserCertTests(ModuleStoreTestCase):
 
         with patch('capa.xqueue_interface.XQueueInterface.send_to_queue') as mock_send_to_queue:
             mock_send_to_queue.return_value = (0, "Successfully queued")
+
             resp = self.client.post(self.url)
             self.assertEqual(resp.status_code, 200)
 
@@ -1784,10 +2142,6 @@ class GenerateUserCertTests(ModuleStoreTestCase):
             )
             mock_tracker.reset_mock()
 
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75})
-    )
     def test_user_with_passing_existing_generating_cert(self):
         # If user has passing grade but also has existing generating cert
         # then json will return cert generating message with bad request code
@@ -1797,14 +2151,15 @@ class GenerateUserCertTests(ModuleStoreTestCase):
             status=CertificateStatuses.generating,
             mode='verified'
         )
-        resp = self.client.post(self.url)
-        self.assertEqual(resp.status_code, HttpResponseBadRequest.status_code)
-        self.assertIn("Certificate is being created.", resp.content)
+        with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+            course_grade = mock_create.return_value
+            course_grade.passed = True
+            course_grade.summary = {'grade': 'Pass', 'percent': 0.75}
 
-    @patch(
-        'lms.djangoapps.grades.new.course_grade.CourseGrade.summary',
-        PropertyMock(return_value={'grade': 'Pass', 'percent': 0.75})
-    )
+            resp = self.client.post(self.url)
+            self.assertEqual(resp.status_code, HttpResponseBadRequest.status_code)
+            self.assertIn("Certificate is being created.", resp.content)
+
     @override_settings(CERT_QUEUE='certificates', LMS_SEGMENT_KEY="foobar")
     def test_user_with_passing_existing_downloadable_cert(self):
         # If user has already downloadable certificate
@@ -1817,9 +2172,14 @@ class GenerateUserCertTests(ModuleStoreTestCase):
             mode='verified'
         )
 
-        resp = self.client.post(self.url)
-        self.assertEqual(resp.status_code, HttpResponseBadRequest.status_code)
-        self.assertIn("Certificate has already been created.", resp.content)
+        with patch('lms.djangoapps.grades.course_grade_factory.CourseGradeFactory.read') as mock_create:
+            course_grade = mock_create.return_value
+            course_grade.passed = True
+            course_grade.summay = {'grade': 'Pass', 'percent': 0.75}
+
+            resp = self.client.post(self.url)
+            self.assertEqual(resp.status_code, HttpResponseBadRequest.status_code)
+            self.assertIn("Certificate has already been created.", resp.content)
 
     def test_user_with_non_existing_course(self):
         # If try to access a course with valid key pattern then it will return
@@ -1891,6 +2251,7 @@ class TestIndexView(ModuleStoreTestCase):
     """
     Tests of the courseware.views.index view.
     """
+    SEO_WAFFLE_FLAG = CourseWaffleFlag(WaffleFlagNamespace(name='seo'), 'enable_anonymous_courseware_access')
 
     @XBlock.register_temp_plugin(ViewCheckerBlock, 'view_checker')
     @ddt.data(ModuleStoreEnum.Type.mongo, ModuleStoreEnum.Type.split)
@@ -1915,6 +2276,7 @@ class TestIndexView(ModuleStoreTestCase):
                 state=json.dumps({'state': unicode(item.scope_ids.usage_id)})
             )
 
+        CourseOverview.load_from_module_store(course.id)
         CourseEnrollmentFactory(user=user, course_id=course.id)
 
         self.assertTrue(self.client.login(username=user.username, password='test'))
@@ -1943,6 +2305,7 @@ class TestIndexView(ModuleStoreTestCase):
             vertical = ItemFactory.create(parent=section, category='vertical', display_name="Vertical")
             ItemFactory.create(parent=vertical, category='id_checker', display_name="ID Checker")
 
+        CourseOverview.load_from_module_store(course.id)
         CourseEnrollmentFactory(user=user, course_id=course.id)
 
         self.assertTrue(self.client.login(username=user.username, password='test'))
@@ -1957,6 +2320,28 @@ class TestIndexView(ModuleStoreTestCase):
             ) + '?activate_block_id=test_block_id'
         )
         self.assertIn("Activate Block ID: test_block_id", response.content)
+
+    def test_anonymous_access(self):
+        course = CourseFactory()
+        with self.store.bulk_operations(course.id):
+            chapter = ItemFactory(parent=course, category='chapter')
+            section = ItemFactory(parent=chapter, category='sequential')
+
+        url = reverse(
+            'courseware_section',
+            kwargs={
+                'course_id': str(course.id),
+                'chapter': chapter.url_name,
+                'section': section.url_name,
+            }
+        )
+        response = self.client.get(url, follow=False)
+        assert response.status_code == 302
+
+        waffle_flag = CourseWaffleFlag(WaffleFlagNamespace(name='seo'), 'enable_anonymous_courseware_access')
+        with override_waffle_flag(waffle_flag, active=True):
+            response = self.client.get(url, follow=False)
+            assert response.status_code == 200
 
 
 @ddt.ddt
@@ -1982,6 +2367,8 @@ class TestIndexViewWithVerticalPositions(ModuleStoreTestCase):
             ItemFactory.create(parent=self.section, category='vertical', display_name="Vertical1")
             ItemFactory.create(parent=self.section, category='vertical', display_name="Vertical2")
             ItemFactory.create(parent=self.section, category='vertical', display_name="Vertical3")
+
+        CourseOverview.load_from_module_store(self.course.id)
 
         self.client.login(username=self.user, password='test')
         CourseEnrollmentFactory(user=self.user, course_id=self.course.id)
@@ -2071,7 +2458,8 @@ class TestIndexViewWithGating(ModuleStoreTestCase, MilestonesTestCaseMixin):
             )
         )
 
-        self.assertEquals(response.status_code, 404)
+        self.assertEquals(response.status_code, 200)
+        self.assertIn("Content Locked", response.content)
 
 
 class TestRenderXBlock(RenderXBlockTestMixin, ModuleStoreTestCase):
@@ -2109,7 +2497,6 @@ class TestRenderXBlockSelfPaced(TestRenderXBlock):
     """
     def setUp(self):
         super(TestRenderXBlockSelfPaced, self).setUp()
-        SelfPacedConfiguration(enabled=True).save()
 
     def course_options(self):
         options = super(TestRenderXBlockSelfPaced, self).course_options()
@@ -2140,14 +2527,13 @@ class TestIndexViewCrawlerStudentStateWrites(SharedModuleStoreTestCase):
     @classmethod
     def setUpTestData(cls):
         """Set up and enroll our fake user in the course."""
-        cls.password = 'test'
-        cls.user = UserFactory(password=cls.password)
+        cls.user = UserFactory()
         CourseEnrollment.enroll(cls.user, cls.course.id)
 
     def setUp(self):
         """Do the client login."""
         super(TestIndexViewCrawlerStudentStateWrites, self).setUp()
-        self.client.login(username=self.user.username, password=self.password)
+        self.client.login(username=self.user.username, password=TEST_PASSWORD)
 
     def test_write_by_default(self):
         """By default, always write student state, regardless of user agent."""
@@ -2187,8 +2573,8 @@ class TestIndexViewCrawlerStudentStateWrites(SharedModuleStoreTestCase):
             'courseware_section',
             kwargs={
                 'course_id': unicode(self.course.id),
-                'chapter': unicode(self.chapter.location.name),
-                'section': unicode(self.section.location.name),
+                'chapter': unicode(self.chapter.location.block_id),
+                'section': unicode(self.section.location.block_id),
             }
         )
         response = self.client.get(url, HTTP_USER_AGENT=user_agent)
@@ -2207,6 +2593,7 @@ class EnterpriseConsentTestCase(EnterpriseTestConsentRequired, ModuleStoreTestCa
         self.user = UserFactory.create()
         self.assertTrue(self.client.login(username=self.user.username, password='test'))
         self.course = CourseFactory.create()
+        CourseOverview.load_from_module_store(self.course.id)
         CourseEnrollmentFactory(user=self.user, course_id=self.course.id)
 
     def test_consent_required(self):
@@ -2232,9 +2619,10 @@ class AccessUtilsTestCase(ModuleStoreTestCase):
         (-1, True)
     )
     @ddt.unpack
+    @patch.dict('django.conf.settings.FEATURES', {'DISABLE_START_DATES': False})
     def test_is_course_open_for_learner(self, start_date_modifier, expected_value):
         staff_user = AdminFactory()
         start_date = datetime.now(UTC) + timedelta(days=start_date_modifier)
         course = CourseFactory.create(start=start_date)
 
-        self.assertEqual(is_course_open_for_learner(staff_user, course), expected_value)
+        self.assertEqual(bool(check_course_open_for_learner(staff_user, course)), expected_value)

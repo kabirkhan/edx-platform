@@ -5,7 +5,11 @@ Tests for Shibboleth Authentication
 @jbau
 """
 import unittest
+from importlib import import_module
+from urllib import urlencode
 
+import django
+import pytest
 from ddt import ddt, data
 from django.conf import settings
 from django.http import HttpResponseRedirect
@@ -14,14 +18,15 @@ from django.test.client import RequestFactory, Client as DjangoTestClient
 from django.test.utils import override_settings
 from django.core.urlresolvers import reverse
 from django.contrib.auth.models import AnonymousUser, User
-from importlib import import_module
 from openedx.core.djangoapps.external_auth.models import ExternalAuthMap
 from openedx.core.djangoapps.external_auth.views import (
     shib_login, course_specific_login, course_specific_register, _flatten_to_ascii
 )
+from openedx.core.djangoapps.user_api import accounts as accounts_settings
+from openedx.tests.util import expected_redirect_url
 from mock import patch
 from nose.plugins.attrib import attr
-from urllib import urlencode
+from six import text_type
 
 from openedx.core.djangolib.testing.utils import CacheIsolationTestCase
 from student.views import change_enrollment
@@ -297,6 +302,7 @@ class ShibSPTest(CacheIsolationTestCase):
 
     @unittest.skipUnless(settings.FEATURES.get('AUTH_USE_SHIB'), "AUTH_USE_SHIB not set")
     @data(*gen_all_identities())
+    @pytest.mark.django111_expected_failure
     def test_registration_form_submit(self, identity):
         """
         Tests user creation after the registration form that pops is submitted.  If there is no shib
@@ -316,7 +322,7 @@ class ShibSPTest(CacheIsolationTestCase):
                     'terms_of_service': u'true',
                     'honor_code': u'true'}
 
-        with patch('student.views.AUDIT_LOG') as mock_audit_log:
+        with patch('student.views.management.AUDIT_LOG') as mock_audit_log:
             self.client.post('/create_account', data=postvars)
 
         mail = identity.get('mail')
@@ -355,15 +361,19 @@ class ShibSPTest(CacheIsolationTestCase):
 
         # check that the created user profile has the right name, either taken from shib or user input
         profile = UserProfile.objects.get(user=user)
-        sn_empty = not identity.get('sn')
-        given_name_empty = not identity.get('givenName')
+        external_name = self.client.session['ExternalAuthMap'].external_name
         displayname_empty = not identity.get('displayName')
 
         if displayname_empty:
-            if sn_empty and given_name_empty:
+            if len(external_name.strip()) < accounts_settings.NAME_MIN_LENGTH:
                 self.assertEqual(profile.name, postvars['name'])
             else:
-                self.assertEqual(profile.name, self.client.session['ExternalAuthMap'].external_name)
+                expected_name = external_name
+                # TODO: Remove Django 1.11 upgrade shim
+                # SHIM: form character fields strip leading and trailing whitespace by default in Django 1.9+
+                if django.VERSION >= (1, 9):
+                    expected_name = expected_name.strip()
+                self.assertEqual(profile.name, expected_name)
                 self.assertNotIn(u';', profile.name)
         else:
             self.assertEqual(profile.name, self.client.session['ExternalAuthMap'].external_name)
@@ -516,10 +526,10 @@ class ShibSPTestModifiedCourseware(ModuleStoreTestCase):
         # Tests the two case for courses, limited and not
         for course in [shib_course, open_enroll_course]:
             for student in [shib_student, other_ext_student, int_student]:
-                request = self.request_factory.post('/change_enrollment')
-
-                request.POST.update({'enrollment_action': 'enroll',
-                                     'course_id': course.id.to_deprecated_string()})
+                request = self.request_factory.post(
+                    '/change_enrollment',
+                    data={'enrollment_action': 'enroll', 'course_id': text_type(course.id)}
+                )
                 request.user = student
                 response = change_enrollment(request)
                 # If course is not limited or student has correct shib extauth then enrollment should be allowed
@@ -561,7 +571,7 @@ class ShibSPTestModifiedCourseware(ModuleStoreTestCase):
         self.assertFalse(CourseEnrollment.is_enrolled(student, course.id))
         self.client.logout()
         params = [
-            ('course_id', course.id.to_deprecated_string()),
+            ('course_id', text_type(course.id)),
             ('enrollment_action', 'enroll'),
             ('next', '/testredirect')
         ]
@@ -574,7 +584,8 @@ class ShibSPTestModifiedCourseware(ModuleStoreTestCase):
         response = self.client.get(**request_kwargs)
         # successful login is a redirect to the URL that handles auto-enrollment
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response['location'], 'http://testserver/account/finish_auth?{}'.format(urlencode(params)))
+        self.assertEqual(response['location'],
+                         expected_redirect_url('/account/finish_auth?{}'.format(urlencode(params))))
 
 
 class ShibUtilFnTest(TestCase):

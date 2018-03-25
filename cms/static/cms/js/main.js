@@ -27,7 +27,10 @@
                 headers: {
                     'X-CSRFToken': $.cookie('csrftoken')
                 },
-                dataType: 'json'
+                dataType: 'json',
+                content: {
+                    script: false
+                }
             });
             $(document).ajaxError(function(event, jqXHR, ajaxSettings) {
                 var msg, contentType,
@@ -40,8 +43,8 @@
                     message = JSON.parse(jqXHR.responseText).error;
                 }
                 msg = new NotificationView.Error({
-                    'title': gettext("Studio's having trouble saving your work"),
-                    'message': message
+                    title: gettext("Studio's having trouble saving your work"),
+                    message: message
                 });
                 console.log('Studio AJAX Error', { // eslint-disable-line no-console
                     url: event.currentTarget.URL,
@@ -61,7 +64,8 @@
                     contentType: 'application/json; charset=utf-8',
                     dataType: 'json',
                     data: JSON.stringify(data),
-                    success: callback
+                    success: callback,
+                    global: data ? data.global : true    // Trigger global AJAX error handler or not
                 });
             };
             $.postJSON = function(url, data, callback) {  // eslint-disable-line no-param-reassign

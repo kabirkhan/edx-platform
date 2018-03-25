@@ -2,22 +2,19 @@
 Test Help links in LMS
 """
 
-import json
-
-from common.test.acceptance.tests.lms.test_lms_instructor_dashboard import BaseInstructorDashboardTest
-from common.test.acceptance.pages.lms.instructor_dashboard import InstructorDashboardPage
-from common.test.acceptance.tests.studio.base_studio_test import ContainerBase
-from common.test.acceptance.fixtures import LMS_BASE_URL
 from common.test.acceptance.fixtures.course import CourseFixture
-
+from common.test.acceptance.pages.lms.instructor_dashboard import InstructorDashboardPage
+from common.test.acceptance.tests.discussion.helpers import CohortTestMixin
+from common.test.acceptance.tests.lms.test_lms_instructor_dashboard import BaseInstructorDashboardTest
+from common.test.acceptance.tests.studio.base_studio_test import ContainerBase
 from common.test.acceptance.tests.helpers import (
-    assert_link,
     assert_opened_help_link_is_correct,
     url_for_help,
+    click_and_wait_for_window
 )
 
 
-class TestCohortHelp(ContainerBase):
+class TestCohortHelp(ContainerBase, CohortTestMixin):
     """
     Tests help links in Cohort page
     """
@@ -34,8 +31,9 @@ class TestCohortHelp(ContainerBase):
         Arguments:
             href (str): Help url
         """
-        actual_link = self.cohort_management.get_cohort_help_element_and_click_help()
-        self.assertEqual(actual_link.text, "What does this mean?")
+        help_element = self.cohort_management.get_cohort_help_element()
+        self.assertEqual(help_element.text, "What does this mean?")
+        click_and_wait_for_window(self, help_element)
         assert_opened_help_link_is_correct(self, href)
 
     def test_manual_cohort_help(self):
@@ -79,15 +77,6 @@ class TestCohortHelp(ContainerBase):
         )
         self.verify_help_link(href)
 
-    def enable_cohorting(self, course_fixture):
-        """
-        Enables cohorting for the current course.
-        """
-        url = LMS_BASE_URL + "/courses/" + course_fixture._course_key + '/cohorts/settings'  # pylint: disable=protected-access
-        data = json.dumps({'is_cohorted': True})
-        response = course_fixture.session.patch(url, data=data, headers=course_fixture.headers)
-        self.assertTrue(response.ok, "Failed to enable cohorts")
-
 
 class InstructorDashboardHelp(BaseInstructorDashboardTest):
     """
@@ -108,5 +97,6 @@ class InstructorDashboardHelp(BaseInstructorDashboardTest):
         Then I see help about the instructor dashboard in a new tab
         """
         href = url_for_help('course_author', '/CA_instructor_dash_help.html')
-        self.instructor_dashboard_page.click_help()
+        help_element = self.instructor_dashboard_page.get_help_element()
+        click_and_wait_for_window(self, help_element)
         assert_opened_help_link_is_correct(self, href)

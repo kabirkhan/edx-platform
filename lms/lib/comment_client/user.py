@@ -1,8 +1,11 @@
 """ User model wrapper for comment service"""
-from .utils import merge_dict, perform_request, CommentClientRequestError, CommentClientPaginatedResult
+from six import text_type
+
+import settings
 
 import models
-import settings
+
+import utils
 
 
 class User(models.Model):
@@ -35,7 +38,7 @@ class User(models.Model):
         Calls cs_comments_service to mark thread as read for the user
         """
         params = {'source_type': source.type, 'source_id': source.id}
-        perform_request(
+        utils.perform_request(
             'post',
             _url_for_read(self.id),
             params,
@@ -45,7 +48,7 @@ class User(models.Model):
 
     def follow(self, source):
         params = {'source_type': source.type, 'source_id': source.id}
-        response = perform_request(
+        response = utils.perform_request(
             'post',
             _url_for_subscription(self.id),
             params,
@@ -55,7 +58,7 @@ class User(models.Model):
 
     def unfollow(self, source):
         params = {'source_type': source.type, 'source_id': source.id}
-        response = perform_request(
+        response = utils.perform_request(
             'delete',
             _url_for_subscription(self.id),
             params,
@@ -69,9 +72,9 @@ class User(models.Model):
         elif voteable.type == 'comment':
             url = _url_for_vote_comment(voteable.id)
         else:
-            raise CommentClientRequestError("Can only vote / unvote for threads or comments")
+            raise utils.CommentClientRequestError("Can only vote / unvote for threads or comments")
         params = {'user_id': self.id, 'value': value}
-        response = perform_request(
+        response = utils.perform_request(
             'put',
             url,
             params,
@@ -86,9 +89,9 @@ class User(models.Model):
         elif voteable.type == 'comment':
             url = _url_for_vote_comment(voteable.id)
         else:
-            raise CommentClientRequestError("Can only vote / unvote for threads or comments")
+            raise utils.CommentClientRequestError("Can only vote / unvote for threads or comments")
         params = {'user_id': self.id}
-        response = perform_request(
+        response = utils.perform_request(
             'delete',
             url,
             params,
@@ -99,11 +102,11 @@ class User(models.Model):
 
     def active_threads(self, query_params={}):
         if not self.course_id:
-            raise CommentClientRequestError("Must provide course_id when retrieving active threads for the user")
+            raise utils.CommentClientRequestError("Must provide course_id when retrieving active threads for the user")
         url = _url_for_user_active_threads(self.id)
-        params = {'course_id': self.course_id.to_deprecated_string()}
-        params = merge_dict(params, query_params)
-        response = perform_request(
+        params = {'course_id': text_type(self.course_id)}
+        params = utils.merge_dict(params, query_params)
+        response = utils.perform_request(
             'get',
             url,
             params,
@@ -115,11 +118,11 @@ class User(models.Model):
 
     def subscribed_threads(self, query_params={}):
         if not self.course_id:
-            raise CommentClientRequestError("Must provide course_id when retrieving subscribed threads for the user")
+            raise utils.CommentClientRequestError("Must provide course_id when retrieving subscribed threads for the user")
         url = _url_for_user_subscribed_threads(self.id)
-        params = {'course_id': self.course_id.to_deprecated_string()}
-        params = merge_dict(params, query_params)
-        response = perform_request(
+        params = {'course_id': text_type(self.course_id)}
+        params = utils.merge_dict(params, query_params)
+        response = utils.perform_request(
             'get',
             url,
             params,
@@ -127,7 +130,7 @@ class User(models.Model):
             metric_tags=self._metric_tags,
             paged_results=True
         )
-        return CommentClientPaginatedResult(
+        return utils.CommentClientPaginatedResult(
             collection=response.get('collection', []),
             page=response.get('page', 1),
             num_pages=response.get('num_pages', 1),
@@ -139,23 +142,23 @@ class User(models.Model):
         retrieve_params = self.default_retrieve_params.copy()
         retrieve_params.update(kwargs)
         if self.attributes.get('course_id'):
-            retrieve_params['course_id'] = self.course_id.to_deprecated_string()
+            retrieve_params['course_id'] = text_type(self.course_id)
         if self.attributes.get('group_id'):
             retrieve_params['group_id'] = self.group_id
         try:
-            response = perform_request(
+            response = utils.perform_request(
                 'get',
                 url,
                 retrieve_params,
                 metric_action='model.retrieve',
                 metric_tags=self._metric_tags,
             )
-        except CommentClientRequestError as e:
+        except utils.CommentClientRequestError as e:
             if e.status_code == 404:
                 # attempt to gracefully recover from a previous failure
                 # to sync this user to the comments service.
                 self.save()
-                response = perform_request(
+                response = utils.perform_request(
                     'get',
                     url,
                     retrieve_params,

@@ -1,17 +1,19 @@
 """Unit tests for provider.py."""
 
+import unittest
+
 from django.contrib.sites.models import Site
 from mock import Mock, patch
+
 from openedx.core.djangoapps.site_configuration.tests.test_util import with_site_configuration
 from third_party_auth import provider
 from third_party_auth.tests import testutil
-import unittest
 
 SITE_DOMAIN_A = 'professionalx.example.com'
 SITE_DOMAIN_B = 'somethingelse.example.com'
 
 
-@unittest.skipUnless(testutil.AUTH_FEATURE_ENABLED, 'third_party_auth not enabled')
+@unittest.skipUnless(testutil.AUTH_FEATURE_ENABLED, testutil.AUTH_FEATURES_KEY + ' not enabled')
 class RegistryTest(testutil.TestCase):
     """Tests registry discovery and operation."""
 
@@ -165,6 +167,9 @@ class RegistryTest(testutil.TestCase):
         facebook_provider = self.configure_facebook_provider(enabled=True)
         self.configure_google_provider(enabled=True)
         self.assertNotIn(facebook_provider, provider.Registry.get_enabled_by_backend_name('google-oauth2'))
+
+    def test_get_returns_none_if_provider_id_is_none(self):
+        self.assertIsNone(provider.Registry.get(None))
 
     def test_get_returns_none_if_provider_not_enabled(self):
         linkedin_provider_id = "oa2-linkedin-oauth2"

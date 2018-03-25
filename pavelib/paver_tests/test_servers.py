@@ -3,8 +3,8 @@
 import ddt
 from paver.easy import call_task
 
-from .utils import PaverTestCase
 from ..utils.envs import Env
+from .utils import PaverTestCase
 
 EXPECTED_COFFEE_COMMAND = (
     u"node_modules/.bin/coffee --compile `find {platform_root}/lms "
@@ -30,7 +30,11 @@ EXPECTED_CMS_SASS_COMMAND = [
     u"python manage.py cms --settings={asset_settings} compile_sass cms ",
 ]
 EXPECTED_COLLECT_STATIC_COMMAND = (
-    u"python manage.py {system} --settings={asset_settings} collectstatic --noinput {log_string}"
+    u'python manage.py {system} --settings={asset_settings} collectstatic '
+    u'--ignore "fixtures" --ignore "karma_*.js" --ignore "spec" '
+    u'--ignore "spec_helpers" --ignore "spec-helpers" --ignore "xmodule_js" '
+    u'--ignore "geoip" --ignore "sass" --ignore "*.coffee" '
+    u'--noinput {log_string}'
 )
 EXPECTED_CELERY_COMMAND = (
     u"python manage.py lms --settings={settings} celery worker --beat --loglevel=INFO --pythonpath=."
@@ -42,11 +46,13 @@ EXPECTED_INDEX_COURSE_COMMAND = (
     u"python manage.py {system} --settings={settings} reindex_course --setup"
 )
 EXPECTED_PRINT_SETTINGS_COMMAND = [
-    u"python manage.py lms --settings={settings} print_settings STATIC_ROOT --format=value 2>/dev/null",
-    u"python manage.py cms --settings={settings} print_settings STATIC_ROOT --format=value 2>/dev/null"
+    u"python manage.py lms --settings={settings} print_setting STATIC_ROOT 2>/dev/null",
+    u"python manage.py cms --settings={settings} print_setting STATIC_ROOT 2>/dev/null",
+    u"python manage.py lms --settings={settings} print_setting WEBPACK_CONFIG_PATH 2>/dev/null"
 ]
 EXPECTED_WEBPACK_COMMAND = (
-    u"NODE_ENV={node_env} STATIC_ROOT_LMS={static_root_lms} STATIC_ROOT_CMS={static_root_cms} $(npm bin)/webpack"
+    u"NODE_ENV={node_env} STATIC_ROOT_LMS={static_root_lms} STATIC_ROOT_CMS={static_root_cms} "
+    "$(npm bin)/webpack --config={webpack_config_path}"
 )
 
 
@@ -102,7 +108,7 @@ class TestPaverServerTasks(PaverTestCase):
         """
         options = server_options.copy()
         is_optimized = options.get("optimized", False)
-        expected_settings = "devstack_optimized" if is_optimized else options.get("settings", "devstack")
+        expected_settings = "devstack_optimized" if is_optimized else options.get("settings", Env.DEVSTACK_SETTINGS)
 
         # First test with LMS
         options["system"] = "lms"
@@ -162,7 +168,7 @@ class TestPaverServerTasks(PaverTestCase):
         """
         Test the "update_db" task.
         """
-        settings = options.get("settings", "devstack")
+        settings = options.get("settings", Env.DEVSTACK_SETTINGS)
         call_task("pavelib.servers.update_db", options=options)
         # pylint: disable=line-too-long
         db_command = "NO_EDXAPP_SUDO=1 EDX_PLATFORM_SETTINGS_OVERRIDE={settings} /edx/bin/edxapp-migrate-{server} --traceback --pythonpath=. "
@@ -185,7 +191,7 @@ class TestPaverServerTasks(PaverTestCase):
         """
         Test the "check_settings" task.
         """
-        settings = options.get("settings", "devstack")
+        settings = options.get("settings", Env.DEVSTACK_SETTINGS)
         call_task("pavelib.servers.check_settings", args=[system, settings])
         self.assertEquals(
             self.task_messages,
@@ -197,6 +203,7 @@ class TestPaverServerTasks(PaverTestCase):
             ]
         )
 
+    # pylint: disable=too-many-statements
     def verify_server_task(self, task_name, options, contracts_default=False):
         """
         Verify the output of a server task.
@@ -231,21 +238,24 @@ class TestPaverServerTasks(PaverTestCase):
         else:
             call_task("pavelib.servers.{task_name}".format(task_name=task_name), options=options)
         expected_messages = options.get("expected_messages", [])
-        expected_settings = settings if settings else "devstack"
+        expected_settings = settings if settings else Env.DEVSTACK_SETTINGS
         expected_asset_settings = asset_settings if asset_settings else expected_settings
         if is_optimized:
             expected_settings = "devstack_optimized"
             expected_asset_settings = "test_static_optimized"
-        expected_collect_static = not is_fast and expected_settings != "devstack"
+        expected_collect_static = not is_fast and expected_settings != Env.DEVSTACK_SETTINGS
         if not is_fast:
             expected_messages.append(u"xmodule_assets common/static/xmodule")
             expected_messages.append(u"install npm_assets")
             expected_messages.append(EXPECTED_COFFEE_COMMAND.format(platform_root=self.platform_root))
-            expected_messages.extend([c.format(settings=expected_asset_settings) for c in EXPECTED_PRINT_SETTINGS_COMMAND])
+            expected_messages.extend(
+                [c.format(settings=expected_asset_settings) for c in EXPECTED_PRINT_SETTINGS_COMMAND]
+            )
             expected_messages.append(EXPECTED_WEBPACK_COMMAND.format(
-                node_env="production" if expected_asset_settings != "devstack" else "development",
+                node_env="production" if expected_asset_settings != Env.DEVSTACK_SETTINGS else "development",
                 static_root_lms=None,
-                static_root_cms=None
+                static_root_cms=None,
+                webpack_config_path=None
             ))
             expected_messages.extend(self.expected_sass_commands(system=system, asset_settings=expected_asset_settings))
         if expected_collect_static:
@@ -273,22 +283,25 @@ class TestPaverServerTasks(PaverTestCase):
         is_fast = options.get("fast", False)
         self.reset_task_messages()
         call_task("pavelib.servers.run_all_servers", options=options)
-        expected_settings = settings if settings else "devstack"
+        expected_settings = settings if settings else Env.DEVSTACK_SETTINGS
         expected_asset_settings = asset_settings if asset_settings else expected_settings
         if is_optimized:
             expected_settings = "devstack_optimized"
             expected_asset_settings = "test_static_optimized"
-        expected_collect_static = not is_fast and expected_settings != "devstack"
+        expected_collect_static = not is_fast and expected_settings != Env.DEVSTACK_SETTINGS
         expected_messages = []
         if not is_fast:
             expected_messages.append(u"xmodule_assets common/static/xmodule")
             expected_messages.append(u"install npm_assets")
             expected_messages.append(EXPECTED_COFFEE_COMMAND.format(platform_root=self.platform_root))
-            expected_messages.extend([c.format(settings=expected_asset_settings) for c in EXPECTED_PRINT_SETTINGS_COMMAND])
+            expected_messages.extend(
+                [c.format(settings=expected_asset_settings) for c in EXPECTED_PRINT_SETTINGS_COMMAND]
+            )
             expected_messages.append(EXPECTED_WEBPACK_COMMAND.format(
-                node_env="production" if expected_asset_settings != "devstack" else "development",
+                node_env="production" if expected_asset_settings != Env.DEVSTACK_SETTINGS else "development",
                 static_root_lms=None,
-                static_root_cms=None
+                static_root_cms=None,
+                webpack_config_path=None
             ))
             expected_messages.extend(self.expected_sass_commands(asset_settings=expected_asset_settings))
         if expected_collect_static:

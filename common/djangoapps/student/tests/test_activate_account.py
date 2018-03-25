@@ -1,12 +1,15 @@
 """Tests for account activation"""
-from mock import patch
 import unittest
+from uuid import uuid4
 
 from django.conf import settings
-from django.test import TestCase, override_settings
 from django.core.urlresolvers import reverse
+from django.test import TestCase, override_settings
+from mock import patch
 
 from edxmako.shortcuts import render_to_string
+from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
+from openedx.core.djangoapps.user_api.config.waffle import PREVENT_AUTH_USER_WRITES, SYSTEM_MAINTENANCE_MSG, waffle
 from student.models import Registration
 from student.tests.factories import UserFactory
 
@@ -28,6 +31,11 @@ class TestActivateAccount(TestCase):
         self.registration = Registration()
         self.registration.register(self.user)
         self.registration.save()
+
+        self.platform_name = configuration_helpers.get_value('PLATFORM_NAME', settings.PLATFORM_NAME)
+        self.activation_email_support_link = configuration_helpers.get_value(
+            'ACTIVATION_EMAIL_SUPPORT_LINK', settings.ACTIVATION_EMAIL_SUPPORT_LINK
+        ) or settings.SUPPORT_SITE_LINK
 
     def login(self):
         """
@@ -116,7 +124,11 @@ class TestActivateAccount(TestCase):
         self.login()
         expected_message = render_to_string(
             'registration/account_activation_sidebar_notice.html',
-            {'email': self.user.email}
+            {
+                'email': self.user.email,
+                'platform_name': self.platform_name,
+                'activation_email_support_link': self.activation_email_support_link
+            }
         )
 
         response = self.client.get(reverse('dashboard'))
@@ -128,7 +140,11 @@ class TestActivateAccount(TestCase):
         self.login()
         expected_message = render_to_string(
             'registration/account_activation_sidebar_notice.html',
-            {'email': self.user.email}
+            {
+                'email': self.user.email,
+                'platform_name': self.platform_name,
+                'activation_email_support_link': self.activation_email_support_link
+            }
         )
         response = self.client.get(reverse('dashboard'))
         self.assertNotContains(response, expected_message, html=True)
@@ -159,3 +175,39 @@ class TestActivateAccount(TestCase):
         )
         response = self.client.get(reverse('dashboard'))
         self.assertNotContains(response, expected_message, html=True)
+
+    def test_account_activation_notification_on_logistration(self):
+        """
+        Verify that logistration page displays success/error/info messages
+        about account activation.
+        """
+        login_page_url = "{login_url}?next={redirect_url}".format(
+            login_url=reverse('signin_user'),
+            redirect_url=reverse('dashboard'),
+        )
+        # Access activation link, message should say that account has been activated.
+        response = self.client.get(reverse('activate', args=[self.registration.activation_key]), follow=True)
+        self.assertRedirects(response, login_page_url)
+        self.assertContains(response, 'Success! You have activated your account.')
+
+        # Access activation link again, message should say that account is already active.
+        response = self.client.get(reverse('activate', args=[self.registration.activation_key]), follow=True)
+        self.assertRedirects(response, login_page_url)
+        self.assertContains(response, 'This account has already been activated.')
+
+        # Open account activation page with an invalid activation link,
+        # there should be an error message displayed.
+        response = self.client.get(reverse('activate', args=[uuid4().hex]), follow=True)
+        self.assertRedirects(response, login_page_url)
+        self.assertContains(response, 'Your account could not be activated')
+
+    def test_account_activation_prevent_auth_user_writes(self):
+        login_page_url = "{login_url}?next={redirect_url}".format(
+            login_url=reverse('signin_user'),
+            redirect_url=reverse('dashboard'),
+        )
+        with waffle().override(PREVENT_AUTH_USER_WRITES, True):
+            response = self.client.get(reverse('activate', args=[self.registration.activation_key]), follow=True)
+            self.assertRedirects(response, login_page_url)
+            self.assertContains(response, SYSTEM_MAINTENANCE_MSG)
+            assert not self.user.is_active
